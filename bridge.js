@@ -34,13 +34,26 @@ export function extractJson(text) {
 const colorList = COLORS.map((c) => `${c[0]} — ${c[1]}`).join(", ");
 
 /* ---------- разбор типажа ---------- */
-export function analyzePrompt() {
-  return `Я прикрепляю 2–5 своих фото. Ты профессиональный стилист-колорист. Определи мой цветотип и типаж внешности и дай рекомендации по стилю. Отвечай по-русски.
+// Метки признаков на фото: что это за признак и где он на фото.
+export const MARK_KINDS = {
+  skin: "кожа", eyes: "глаза", hair: "волосы", brows: "брови", lips: "губы",
+  face: "форма лица", features: "черты", contrast: "контраст",
+};
+const SAMPLE_KINDS = new Set(["skin", "eyes", "hair", "brows", "lips"]);
+export const sampleable = (kind) => SAMPLE_KINDS.has(kind);
+
+export function analyzePrompt(nPhotos = 0) {
+  const marks = nPhotos > 0 ? `
+
+Фото пронумерованы по порядку прикрепления: от 1 до ${nPhotos}. В поле markers отметь на фото признаки, на которых основан разбор цветотипа и типажа: 3–6 меток на каждое фото, где хорошо видно лицо. Для каждой метки укажи номер фото, координаты точки (x и y от 0 до 1 от левого верхнего угла фото), вид признака и короткую подпись. Точку ставь прямо на признак: skin — на щеку или лоб, eyes — на радужку, hair — на прядь, brows — на бровь, lips — на губы, face/features/contrast — на соответствующую часть лица.` : "";
+  const markSchema = nPhotos > 0 ? `,
+  "markers": [{"photo": 1, "x": 0.52, "y": 0.41, "kind": "одно из: ${Object.keys(MARK_KINDS).join(", ")}", "label": "признак, 2–5 слов, например «холодный розовый подтон»", "note": "что это значит для стиля, одно короткое предложение"}]` : "";
+  return `Я прикрепляю ${nPhotos > 0 ? nPhotos : "2–5"} ${nPhotos === 1 ? "своё фото" : "своих фото"}. Ты профессиональный стилист-колорист. Определи мой цветотип и типаж внешности и дай рекомендации по стилю. Отвечай по-русски.
 Это может быть человек любого пола. Не предполагай пол заранее: ориентируйся на то, что видно на фото, и подбирай рекомендации под этого человека. Не советуй по умолчанию платья, юбки, каблуки или макияж; предлагай их, только если они уместны для этого образа. Обращайся на «ты» в нейтральной форме, без окончаний, выдающих пол.
 Для типажа используй систему, которая подходит человеку (например, Kibbe или её аналоги для мужских типажей) и коротко объясни, что это значит для одежды.
 Говори уважительно и только о цвете, чертах лица и стиле: не оценивай внешность и фигуру. Если что-то по фото не видно (свет, фильтры, макияж), пиши «похоже на» и укажи это в unsure.
 
-Цвета для palette и avoid бери ТОЛЬКО из этих ключей: ${colorList}.
+Цвета для palette и avoid бери ТОЛЬКО из этих ключей: ${colorList}.${marks}
 
 Ответь ТОЛЬКО одним JSON-объектом, без текста до и после:
 {
@@ -55,11 +68,13 @@ export function analyzePrompt() {
   "hair": "совет по цвету волос или стрижке (а если есть борода — и по ней), одно предложение",
   "makeup": "совет по уходу и макияжу, если он уместен: брови, кожа, губы или акцент на глаза; 1–2 предложения",
   "tips": ["3–4 коротких конкретных совета по одежде и аксессуарам"],
-  "unsure": "что по фото определить нельзя, или пустая строка"
+  "unsure": "что по фото определить нельзя, или пустая строка"${markSchema}
 }`;
 }
 
-export function parseAnalysis(text) {
+const clamp01 = (v) => Math.min(1, Math.max(0, Number(v)));
+
+export function parseAnalysis(text, nPhotos = 0) {
   const r = extractJson(text);
   const ct = r.colortype || {}, ty = r.type || {};
   if (!str(ct.name, 100)) throw new Error("В ответе нет цветотипа. Проверь, что скопирован ответ на этот запрос.");
@@ -77,6 +92,15 @@ export function parseAnalysis(text) {
     makeup: str(r.makeup, 400),
     tips: arr(r.tips).map((x) => str(x, 200)).filter(Boolean).slice(0, 5),
     unsure: str(r.unsure, 300),
+    markers: nPhotos > 0 ? arr(r.markers)
+      .map((m) => ({
+        photo: Math.round(Number(m?.photo)),
+        x: clamp01(m?.x), y: clamp01(m?.y),
+        kind: MARK_KINDS[m?.kind] ? m.kind : "features",
+        label: str(m?.label, 60), note: str(m?.note, 160),
+      }))
+      .filter((m) => m.photo >= 1 && m.photo <= nPhotos && m.label && Number.isFinite(m.x) && Number.isFinite(m.y))
+      .slice(0, 8 * nPhotos) : [],
     at: Date.now(),
   };
 }

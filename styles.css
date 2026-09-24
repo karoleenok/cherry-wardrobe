@@ -139,3 +139,13 @@ textarea{resize:vertical;min-height:70px}
 .steps li>*+*{margin-top:8px}
 .steps li::marker{font-family:var(--mono);font-weight:600}
 .steps a{color:var(--ink);font-weight:600}
+.selfie .num{position:absolute;left:6px;top:6px;min-width:22px;height:22px;padding:0 6px;border-radius:99px;background:rgba(29,26,27,.8);color:#fff;font-family:var(--mono);font-size:12px;display:grid;place-items:center}
+.look{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:720px){.look{grid-template-columns:1fr}}
+.look-photo{cursor:default;max-width:100%}
+.look .k{font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.pip .mk.num{display:grid;place-items:center;width:26px;height:26px;margin:-13px 0 0 -13px}
+.pip .mk.num span{position:static;background:rgba(29,26,27,.82);color:#fff;font-family:var(--mono);font-size:11px;font-style:normal;padding:0;border-radius:50%;width:16px;height:16px;display:grid;place-items:center}
+.legend{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.legend li{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;font-size:14px}
+.lg-n{width:24px;height:24px;border-radius:50%;background:var(--ink);color:var(--bg);font-family:var(--mono);font-size:12px;display:grid;place-items:center}

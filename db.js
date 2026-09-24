@@ -57,9 +57,10 @@ async function b64ToBlob(dataUrl) {
 export async function exportAll() {
   const [items, outfits, profile] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile")]);
   const photos = {};
-  for (const it of items) if (it.photo_path) {
-    const b = await store.get("photos", it.photo_path);
-    if (b) photos[it.photo_path] = await blobToB64(b);
+  const keys = [...items.map((it) => it.photo_path), ...(profile?.photos || [])].filter(Boolean);
+  for (const k of keys) {
+    const b = await store.get("photos", k);
+    if (b) photos[k] = await blobToB64(b);
   }
   return { app: "cherry-wardrobe", version: 1, exported_at: new Date().toISOString(), items, outfits, profile: profile || null, photos };
 }

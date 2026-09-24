@@ -1,6 +1,6 @@
 import { store, byNewest, persist, exportAll, importAll } from "./db.js";
 import { CATS, COLORS, STYLES, SEASONS } from "./catalog.js";
-import { CHAT_URL, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits } from "./bridge.js";
+import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits } from "./bridge.js";
 
 /* ---------- справочники ---------- */
 const CATT = Object.fromEntries(CATS.map((c) => [c.id, c.t]));
@@ -22,7 +22,7 @@ const S = {
   build: EMPTY_BUILD(), activeSlot: "top", fwOnly: true,
   req: { occasion: "", weather: "", wish: "" },
   ai: { out: null },
-  skipOnb: false, outDel: null,
+  skipOnb: false, outDel: null, selfies: [], viewPhoto: 0,
 };
 try {
   S.tab = sessionStorage.getItem("wd-tab") || "wardrobe";
@@ -56,6 +56,7 @@ function tile(it) {
 // а ответ вставляет обратно.
 const HINTS = {
   analyze: "прикрепи 2–5 своих фото (лицо при дневном свете, без фильтров)",
+  analyzeN: (n) => `прикрепи эти же ${n} фото в том же порядке, как пронумерованы выше`,
   tag: "прикрепи фото этой вещи",
   outfits: "фото прикреплять не нужно",
 };
@@ -69,7 +70,7 @@ function bridgeBox(kind) {
   return `<div class="panel stack bridge" style="gap:12px">
     <ol class="steps">
       <li><div class="row"><span>Скопируй запрос</span><button type="button" class="btn cherry" data-act="br-copy">Скопировать запрос</button></div></li>
-      <li>Открой <a href="${CHAT_URL}" target="_blank" rel="noopener">claude.ai</a> в новой вкладке, ${HINTS[kind]}, вставь запрос и отправь.</li>
+      <li>Открой <a href="${CHAT_URL}" target="_blank" rel="noopener">claude.ai</a> в новой вкладке, ${kind === "analyze" && b.n ? HINTS.analyzeN(b.n) : HINTS[kind]}, вставь запрос и отправь.</li>
       <li><span>Скопируй ответ Claude целиком и вставь сюда</span>
         <textarea id="br-answer" class="f" rows="5" placeholder="{ ... }">${esc(b.answer)}</textarea>
         <div class="row"><button type="button" class="btn" data-act="br-apply">Готово</button><button type="button" class="btn ghost" data-act="br-close">Отмена</button></div></li>
@@ -91,8 +92,10 @@ async function applyAnswer() {
   b.answer = $("br-answer")?.value || b.answer;
   try {
     if (b.kind === "analyze") {
-      await setProfile({ analysis: parseAnalysis(b.answer), text: null });
-      S.br = null; S.tab = "profile";
+      const an = parseAnalysis(b.answer, b.n || 0);
+      const photos = await saveSelfies(an);
+      await setProfile({ analysis: an, text: null, photos });
+      S.br = null; S.tab = "profile"; S.viewPhoto = 0;
       try { sessionStorage.setItem("wd-tab", "profile"); } catch {}
       toast("Типаж определён"); render(); window.scrollTo(0, 0);
     } else if (b.kind === "tag") {
@@ -104,6 +107,48 @@ async function applyAnswer() {
       S.br = null; render();
     }
   } catch (e) { b.err = e.message; render(); }
+}
+// Сохраняет загруженные фото типажа и снимает с них оттенки в точках меток.
+async function saveSelfies(an) {
+  if (!S.selfies.length) return S.profile?.photos || [];
+  for (const m of an.markers) {
+    const x = S.selfies[m.photo - 1];
+    if (x && sampleable(m.kind)) { try { m.hex = await sampleAt(x.blob, m.x, m.y); } catch {} }
+  }
+  const stamp = Date.now();
+  const keys = [];
+  for (let i = 0; i < S.selfies.length; i++) { const k = `self-${stamp}-${i + 1}`; await store.put("photos", S.selfies[i].blob, k); keys.push(k); }
+  for (const k of S.profile?.photos || []) { await store.del("photos", k).catch(() => {}); dropUrl(k); }
+  S.selfies.forEach((x) => URL.revokeObjectURL(x.url));
+  S.selfies = [];
+  return keys;
+}
+async function sampleAt(blob, fx, fy) {
+  const bmp = await createImageBitmap(blob);
+  const cv = document.createElement("canvas");
+  cv.width = bmp.width; cv.height = bmp.height;
+  const g = cv.getContext("2d");
+  g.drawImage(bmp, 0, 0);
+  const r = Math.max(2, Math.round(bmp.width / 100));
+  const cx = Math.round(fx * bmp.width), cy = Math.round(fy * bmp.height);
+  const d = g.getImageData(Math.max(0, cx - r), Math.max(0, cy - r), 2 * r + 1, 2 * r + 1).data;
+  let R = 0, G = 0, B = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4) { R += d[i]; G += d[i + 1]; B += d[i + 2]; n++; }
+  const h = (v) => Math.round(v / n).toString(16).padStart(2, "0");
+  return "#" + h(R) + h(G) + h(B);
+}
+function refreshAnalyzeBridge() {
+  if (S.br?.kind === "analyze") { S.br.n = S.selfies.length; S.br.prompt = analyzePrompt(S.selfies.length); }
+}
+async function addSelfies(files) {
+  const list = [...files].filter((f) => /^image\//.test(f.type)).slice(0, 5 - S.selfies.length);
+  for (const f of list) { try { const b = await downscale(f, 1200); S.selfies.push({ blob: b, url: URL.createObjectURL(b) }); } catch {} }
+  refreshAnalyzeBridge(); render();
+}
+function selfieBlock() {
+  return '<div class="selfies">' + S.selfies.map((x, i) => `<div class="selfie"><img src="${x.url}" alt="Фото ${i + 1}"><span class="num">${i + 1}</span><button type="button" class="rm" data-act="selfie-rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`).join("") +
+    (S.selfies.length < 5 ? '<label class="selfie add" for="selfie-in">+ фото<br>лицо при дневном свете</label>' : "") + "</div>" +
+    '<input class="sr" type="file" id="selfie-in" accept="image/jpeg,image/png,image/webp" multiple>';
 }
 function downscale(file, max = 1000) {
   return new Promise((res, rej) => {
@@ -142,15 +187,16 @@ async function loadAll() {
   render();
 }
 async function photoUrls() {
-  for (const it of S.items) {
-    if (!it.photo_path || S.urls[it.photo_path]) continue;
-    const b = await store.get("photos", it.photo_path);
-    if (b) S.urls[it.photo_path] = URL.createObjectURL(b);
+  const keys = [...S.items.map((it) => it.photo_path), ...(S.profile?.photos || [])];
+  for (const k of keys) {
+    if (!k || S.urls[k]) continue;
+    const b = await store.get("photos", k);
+    if (b) S.urls[k] = URL.createObjectURL(b);
   }
 }
 async function reloadItems() { S.items = (await store.all("items")).sort(byNewest); await photoUrls(); }
 async function reloadOutfits() { S.outfits = (await store.all("outfits")).sort(byNewest); }
-async function setProfile(p) { S.profile = p; await store.put("kv", p, "profile"); applyKinds(analysis()); }
+async function setProfile(p) { S.profile = p; await store.put("kv", p, "profile"); applyKinds(analysis()); await photoUrls(); }
 function dropUrl(path) { if (path && S.urls[path]) { URL.revokeObjectURL(S.urls[path]); delete S.urls[path]; } }
 
 /* ---------- вкладки ---------- */
@@ -391,19 +437,20 @@ function viewOutfits() {
 /* ---------- типаж ---------- */
 const colNames = (keys) => (keys || []).filter((k) => COL[k]).map((k) => COL[k].t);
 function analyzeControls() {
-  return S.br?.kind === "analyze" ? bridgeBox("analyze") : '<div class="row"><button class="btn cherry" data-act="an-go">✦ Определить мой типаж</button></div>';
+  const up = `<div class="stack" style="gap:8px"><span class="small"><b>Твои фото</b> <span class="muted">(необязательно, до 5): на них появятся метки признаков типажа. Фото хранятся только в этом браузере.</span></span>${selfieBlock()}</div>`;
+  return up + (S.br?.kind === "analyze" ? bridgeBox("analyze") : '<div class="row"><button class="btn cherry" data-act="an-go">✦ Определить мой типаж</button></div>');
 }
 function viewOnboarding() {
   return `<div class="hero"><div class="stack" style="gap:8px"><span class="muted small" style="font-family:var(--mono);letter-spacing:.07em;text-transform:uppercase">Перед стартом</span>
     <h1>Сначала разберём твой <em>типаж</em></h1>
-    <p class="lead muted">Разбор делает Claude в обычном чате на claude.ai, подойдёт и бесплатный аккаунт. Сайт подготовит запрос, ты отправишь его вместе с 2–5 своими фото (лицо при дневном свете, без фильтров) и вставишь ответ сюда. Потом сайт будет подбирать образы и предупреждать о неподходящих цветах. Фото остаются только в твоём чате, а гардероб хранится в этом браузере.</p></div>
+    <p class="lead muted">Разбор делает Claude в обычном чате на claude.ai, подойдёт и бесплатный аккаунт. Загрузи сюда 2–5 своих фото (лицо при дневном свете, без фильтров): на них появятся метки признаков типажа. Сайт подготовит запрос, ты отправишь его в чат вместе с этими же фото и вставишь ответ сюда. Фото и гардероб хранятся только в этом браузере.</p></div>
     ${analyzeControls()}
     <button class="btn ghost" style="justify-self:start" data-act="skip-onb">Пропустить и сразу к вещам</button></div>`;
 }
 function viewAnalysis(a) {
   const chips = (keys, warn) => '<div class="chips">' + (keys || []).filter((k) => COL[k]).map((k) => `<span class="chip" style="cursor:default${warn ? ";color:var(--warn)" : ""}"><i class="dot" style="background:${COL[k].hex}"></i>${esc(COL[k].t)}</span>`).join("") + "</div>";
   const ct = a.colortype || {}, ty = a.type || {};
-  return `<div class="an">${a.summary ? `<p class="lead">${esc(a.summary)}</p>` : ""}
+  return `<div class="an">${viewLook(a)}${a.summary ? `<p class="lead">${esc(a.summary)}</p>` : ""}
     <div class="an-grid">
       <div class="an-card"><span class="k">Цветотип</span><b>${esc(ct.name || "—")}</b><p><span class="muted">Подтон:</span> ${esc(ct.undertone)}</p><p><span class="muted">Глаза:</span> ${esc(ct.eyes)}</p><p><span class="muted">Волосы:</span> ${esc(ct.hair)}</p><p><span class="muted">Контраст:</span> ${esc(ct.contrast)}</p></div>
       <div class="an-card"><span class="k">Типаж внешности</span><b>${esc(ty.name || "—")}</b><p>${esc(ty.features)}</p></div>
@@ -419,6 +466,24 @@ function viewAnalysis(a) {
       ${a.tips?.length ? `<div class="an-card"><span class="k">Советы</span><ul>${a.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
     </div>
     ${a.unsure ? `<p class="muted small">Что по фото определить не получилось: ${esc(a.unsure)}</p>` : ""}</div>`;
+}
+function viewLook(a) {
+  const photos = (S.profile?.photos || []).filter((k) => S.urls[k]);
+  if (!photos.length) return "";
+  const i = Math.min(S.viewPhoto, photos.length - 1);
+  const marks = (a.markers || []).map((m, n) => ({ ...m, n: n + 1 })).filter((m) => m.photo === i + 1);
+  return `<div class="look">
+    <div class="stack" style="gap:8px">
+      <div class="pip look-photo"><img src="${S.urls[photos[i]]}" alt="Фото ${i + 1} с метками признаков">
+        ${marks.map((m) => `<i class="mk num" style="left:${(m.x * 100).toFixed(1)}%;top:${(m.y * 100).toFixed(1)}%;background:${m.hex || "var(--accent)"}"><span>${m.n}</span></i>`).join("")}
+      </div>
+      ${photos.length > 1 ? `<div class="thumbs">${photos.map((k, j) => `<button data-act="look" data-i="${j}" aria-pressed="${j === i}" aria-label="Фото ${j + 1}"><img src="${S.urls[k]}" alt=""></button>`).join("")}</div>` : ""}
+    </div>
+    <div class="stack" style="gap:10px"><span class="k">Признаки на фото</span>
+      ${marks.length ? `<ol class="legend">${marks.map((m) => `<li><span class="lg-n">${m.n}</span><span class="stack" style="gap:2px"><b>${esc(m.label)}</b><span class="muted small">${esc(MARK_KINDS[m.kind] || "")}${m.hex ? ` · <i class="dot" style="background:${m.hex}"></i> ${m.hex}` : ""}</span>${m.note ? `<span class="small">${esc(m.note)}</span>` : ""}</span></li>`).join("")}</ol>`
+        : '<p class="muted small">На этом фото Claude не отметил признаков.</p>'}
+    </div>
+  </div>`;
 }
 function analysisText(a) {
   if (!a) return "";
@@ -506,7 +571,9 @@ document.addEventListener("click", async (e) => {
       try { await store.del("outfits", d.id); } catch { toast("Не получилось удалить"); return; }
       S.outDel = null; await reloadOutfits(); render(); toast("Образ удалён"); return;
     }
-    case "an-go": openBridge("analyze", analyzePrompt()); return;
+    case "an-go": openBridge("analyze", analyzePrompt(S.selfies.length), { n: S.selfies.length }); return;
+    case "selfie-rm": { const x = S.selfies.splice(+d.i, 1)[0]; if (x) URL.revokeObjectURL(x.url); refreshAnalyzeBridge(); render(); return; }
+    case "look": S.viewPhoto = +d.i; render(); return;
     case "skip-onb": S.skipOnb = true; try { sessionStorage.setItem("wd-skip", "1"); } catch {} render(); return;
     case "p-save": saveProfileText($("p-text").value.trim() || null); return;
     case "p-reset": saveProfileText(null); return;
@@ -519,6 +586,7 @@ document.addEventListener("submit", (e) => {
 document.addEventListener("change", (e) => {
   const id = e.target.id;
   if (id === "f-photo" && e.target.files?.[0]) setFile(e.target.files[0]);
+  if (id === "selfie-in" && e.target.files?.length) addSelfies(e.target.files);
   if (id === "import-in" && e.target.files?.[0]) {
     e.target.files[0].text().then((t) => { try { S.importConfirm = JSON.parse(t); } catch { toast("Файл не похож на копию гардероба"); } render(); });
   }

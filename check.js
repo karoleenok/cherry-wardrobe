@@ -53,4 +53,20 @@ assert.deepEqual(o.outfits[0].items, ["id-a", "id-b", "id-c"]);
 assert.equal(o.tip, "шарф");
 assert.throws(() => parseOutfits('{"outfits":[]}', map), /нет образов/);
 
+// Метки на фото: номер фото в пределах, координаты зажаты в 0..1, неизвестный вид -> features
+assert.match(analyzePrompt(2), /от 1 до 2/);
+assert.doesNotMatch(analyzePrompt(0), /markers/);
+const withMarks = parseAnalysis(JSON.stringify({
+  colortype: { name: "Лето" }, type: {}, palette: [], avoid: [],
+  markers: [
+    { photo: 1, x: 0.5, y: 0.4, kind: "skin", label: "холодный подтон", note: "серебро" },
+    { photo: 2, x: 1.4, y: -0.2, kind: "???", label: "мягкие черты" },
+    { photo: 3, x: 0.1, y: 0.1, kind: "eyes", label: "нет такого фото" },
+    { photo: 1, x: 0.2, y: 0.2, kind: "hair", label: "" },
+  ],
+}), 2);
+assert.equal(withMarks.markers.length, 2);
+assert.deepEqual([withMarks.markers[1].x, withMarks.markers[1].y, withMarks.markers[1].kind], [1, 0, "features"]);
+assert.deepEqual(parseAnalysis('{"colortype":{"name":"Лето"},"markers":[{"photo":1,"x":0.5,"y":0.5,"label":"x"}]}', 0).markers, []);
+
 console.log("OK: все проверки прошли");
