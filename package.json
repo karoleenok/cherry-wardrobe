@@ -1,0 +1,6 @@
+{
+  "name": "cherry-wardrobe",
+  "private": true,
+  "type": "module",
+  "scripts": { "check": "node check.js" }
+}
