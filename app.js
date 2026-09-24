@@ -98,7 +98,7 @@ async function applyAnswer() {
     } else if (b.kind === "tag") {
       readForm();
       Object.assign(S.draft, parseTag(b.answer));
-      S.br = null; toast("Заполнила по фото, проверь поля"); render();
+      S.br = null; toast("Поля заполнены по фото, проверь их"); render();
     } else if (b.kind === "outfits") {
       S.ai.out = parseOutfits(b.answer, b.map);
       S.br = null; render();
@@ -378,7 +378,7 @@ function viewOutfits() {
   return h + '<div class="outfits" style="margin-top:16px">' + S.outfits.map((o) => {
     const gone = o.items.filter((id) => !byId(id)).length;
     const sm = "padding:5px 10px;font-size:13px";
-    return `<div class="idea"><div class="row between"><b>${esc(o.title)}</b><span class="muted small">${o.source === "ai" ? "✦ стилист" : "сама"}</span></div>
+    return `<div class="idea"><div class="row between"><b>${esc(o.title)}</b><span class="muted small">${o.source === "ai" ? "✦ стилист" : "вручную"}</span></div>
       <div class="mini">${o.items.filter(byId).map((id) => tile(byId(id))).join("")}</div>
       ${o.why ? `<span class="small muted">${esc(o.why)}</span>` : ""}
       ${gone ? `<span class="small" style="color:var(--warn)">${gone} вещ. уже нет в гардеробе</span>` : ""}
@@ -415,7 +415,7 @@ function viewAnalysis(a) {
     </div>
     <div class="an-grid">
       ${a.hair ? `<div class="an-card"><span class="k">Волосы</span><p>${esc(a.hair)}</p></div>` : ""}
-      ${a.makeup ? `<div class="an-card"><span class="k">Макияж</span><p>${esc(a.makeup)}</p></div>` : ""}
+      ${a.makeup ? `<div class="an-card"><span class="k">Уход и макияж</span><p>${esc(a.makeup)}</p></div>` : ""}
       ${a.tips?.length ? `<div class="an-card"><span class="k">Советы</span><ul>${a.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
     </div>
     ${a.unsure ? `<p class="muted small">Что по фото определить не получилось: ${esc(a.unsure)}</p>` : ""}</div>`;
