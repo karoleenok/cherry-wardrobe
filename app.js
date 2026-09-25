@@ -2,7 +2,7 @@ import { store, byNewest, persist, exportAll, importAll } from "./db.js";
 import { CATS, COLORS, STYLES, SEASONS, SEASON_TYPES, SCALES } from "./catalog.js";
 import { PINS } from "./pins.js";
 import { weatherText, weatherNeeds, scoreOutfit, suggestOutfits, countCombos, dayKey, wearStats, wardrobeGaps, CAPSULE_PRESETS, buildCapsule } from "./logic.js";
-import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits } from "./bridge.js";
+import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits, SHOPS, lookPrompt, parseLook } from "./bridge.js";
 
 /* ---------- справочники ---------- */
 const CATT = Object.fromEntries(CATS.map((c) => [c.id, c.t]));
@@ -22,6 +22,7 @@ const S = {
   settings: {}, weather: null, wErr: null, wBusy: false, seed: 1,
   wears: [], wishlist: [], capsules: [], calMonth: dayKey().slice(0, 7), calDay: null,
   cap: { preset: "week", season: "any", styles: [] }, capResult: null,
+  looks: [], lookImg: null, lookRes: null,
   items: [], outfits: [], profile: null, urls: {},
   filter: "all", edit: null, draft: null, delConfirm: null, saving: false, formErr: null,
   build: EMPTY_BUILD(), activeSlot: "top", fwOnly: true,
@@ -64,6 +65,7 @@ const HINTS = {
   analyzeN: (n) => `прикрепи эти же ${n} фото в том же порядке, как пронумерованы выше`,
   tag: "прикрепи фото этой вещи",
   outfits: "фото прикреплять не нужно",
+  look: "прикрепи эту картинку-коллаж",
 };
 function openBridge(kind, prompt, extra = {}) {
   S.br = { kind, prompt, answer: "", err: null, ...extra };
@@ -107,6 +109,9 @@ async function applyAnswer() {
       readForm();
       Object.assign(S.draft, parseTag(b.answer));
       S.br = null; toast("Поля заполнены по фото, проверь их"); render();
+    } else if (b.kind === "look") {
+      S.lookRes = { ...parseLook(b.answer), photoKey: null };
+      S.br = null; render(); window.scrollTo(0, 0);
     } else if (b.kind === "outfits") {
       S.ai.out = parseOutfits(b.answer, b.map);
       S.br = null; render();
@@ -177,8 +182,8 @@ function downscale(file, max = 1000) {
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 async function loadAll() {
   try {
-    const [items, outfits, profile, settings, wears, wishlist, capsules, weather] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile"),
-      store.get("kv", "settings"), store.get("kv", "wears"), store.get("kv", "wishlist"), store.get("kv", "capsules"), store.get("kv", "weather")]);
+    const [items, outfits, profile, settings, wears, wishlist, capsules, weather, looks] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile"),
+      store.get("kv", "settings"), store.get("kv", "wears"), store.get("kv", "wishlist"), store.get("kv", "capsules"), store.get("kv", "weather"), store.get("kv", "looks")]);
     S.items = items.sort(byNewest);
     S.outfits = outfits.sort(byNewest);
     S.profile = profile || null;
@@ -187,6 +192,7 @@ async function loadAll() {
     S.wishlist = wishlist || [];
     S.capsules = capsules || [];
     S.weather = weather || null;
+    S.looks = looks || [];
   } catch (e) {
     console.error(e);
     $("main").innerHTML = '<div class="notice err">Браузер не даёт сохранять данные на этом сайте (например, в режиме инкогнито). Открой сайт в обычном окне.</div>';
@@ -199,7 +205,7 @@ async function loadAll() {
   refreshWeather();
 }
 async function photoUrls() {
-  const keys = [...S.items.map((it) => it.photo_path), ...(S.profile?.photos || [])];
+  const keys = [...S.items.map((it) => it.photo_path), ...(S.profile?.photos || []), ...S.looks.map((l) => l.photoKey)];
   for (const k of keys) {
     if (!k || S.urls[k]) continue;
     const b = await store.get("photos", k);
@@ -213,7 +219,7 @@ function dropUrl(path) { if (path && S.urls[path]) { URL.revokeObjectURL(S.urls[
 
 /* ---------- вкладки ---------- */
 function renderTabs() {
-  const tabs = [["today", "Сегодня", null], ["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["capsules", "Капсулы", S.capsules.length || null], ["stats", "Статистика", null], ["profile", "Мой типаж", null]];
+  const tabs = [["today", "Сегодня", null], ["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["look", "Найти образ", S.looks.length || null], ["capsules", "Капсулы", S.capsules.length || null], ["stats", "Статистика", null], ["profile", "Мой типаж", null]];
   $("tabs").innerHTML = tabs.map((t) => `<button class="tab" role="tab" id="tab-${t[0]}" data-tab="${t[0]}" aria-selected="${S.tab === t[0]}">${t[1]}${t[2] != null ? `<span class="n">${t[2]}</span>` : ""}</button>`).join("");
 }
 function render() {
@@ -226,6 +232,7 @@ function render() {
   else if (S.tab === "outfits") m.innerHTML = viewOutfits();
   else if (S.tab === "today") m.innerHTML = viewToday();
   else if (S.tab === "capsules") m.innerHTML = viewCapsules();
+  else if (S.tab === "look") m.innerHTML = viewShop();
   else if (S.tab === "stats") m.innerHTML = viewStats();
   else m.innerHTML = viewProfile();
 }
@@ -827,6 +834,68 @@ function capsuleCard(cp, fresh) {
   </div>`;
 }
 
+/* ---------- найти образ по коллажу ---------- */
+function lookMatches(it) {
+  const same = S.items.filter((w) => w.cat === it.cat && w.color === it.color);
+  if (same.length) return { exact: true, list: same.slice(0, 3) };
+  const near = S.items.filter((w) => w.cat === it.cat && kindOf(w.color) === "neutral" && kindOf(it.color) === "neutral");
+  return { exact: false, list: near.slice(0, 3) };
+}
+function lookImgUrl() {
+  const r = S.lookRes;
+  if (r?.photoKey) return S.urls[r.photoKey];
+  return S.lookImg?.url || null;
+}
+function viewShop() {
+  let h = `<div class="stack" style="gap:2px"><h2>Найти образ</h2><span class="muted small">Загрузи коллаж или фото образа. Claude разберёт его на вещи, а сайт подскажет, где искать похожие на Wildberries, Ozon и Яндекс Маркете.</span></div>`;
+  const r = S.lookRes, img = lookImgUrl();
+  if (!r) {
+    h += `<div class="shop-up" style="margin-top:14px">
+      <label class="drop look-drop" for="look-in">${img ? `<img src="${img}" alt="Загруженный коллаж">` : "<span>Перетащи сюда коллаж<br>или нажми, чтобы выбрать</span>"}</label>
+      <input class="sr" type="file" id="look-in" accept="image/jpeg,image/png,image/webp">
+      <div class="stack">${img ? (S.br?.kind === "look" ? bridgeBox("look") : '<div class="row"><button class="btn cherry" data-act="look-go">✦ Разобрать через Claude</button><button class="btn ghost" data-act="look-reset">Другая картинка</button></div><p class="muted small">Совет: включи в claude.ai веб-поиск, тогда Claude пришлёт и прямые ссылки на товары.</p>') : '<p class="muted small">Подойдут коллажи из Pinterest, скриншоты из соцсетей или фото образа целиком.</p>'}</div>
+    </div>`;
+  } else {
+    const marks = r.items.map((it, n) => ({ ...it, n: n + 1 })).filter((m) => m.x !== null && m.y !== null);
+    h += `<div class="shop-res" style="margin-top:14px">
+      <div class="stack" style="gap:10px">
+        ${img ? `<div class="pip look-photo shop-photo"><img src="${img}" alt="Коллаж образа"><div class="layer">${marks.map((m) => `<i class="pt static" style="left:${(m.x * 100).toFixed(1)}%;top:${(m.y * 100).toFixed(1)}%;background:${(COL[m.color] || {}).hex || "var(--accent)"};color:${inkOn((COL[m.color] || {}).hex)}">${m.n}</i>`).join("")}</div></div>` : ""}
+        <div class="row" style="gap:6px">${r.photoKey ? `<button class="linkbtn" data-act="look-del" data-id="${r.id}">удалить разбор</button>` : '<button class="btn cherry" data-act="look-save">Сохранить разбор</button>'}<button class="btn ghost" data-act="look-build">Собрать похожий из моих вещей</button><button class="btn ghost" data-act="look-new">Новый коллаж</button></div>
+      </div>
+      <div class="stack" style="gap:12px">
+        <div class="stack" style="gap:4px"><h3>${esc(r.title)}</h3>${r.style ? `<span class="muted small">${esc(r.style)}</span>` : ""}${r.tip ? `<p class="small" style="margin:0">${esc(r.tip)}</p>` : ""}</div>
+        ${r.items.map((it, n) => shopItem(it, n)).join("")}
+      </div>
+    </div>`;
+  }
+  if (S.looks.length) h += `<div class="stack" style="margin-top:24px"><h3>Сохранённые разборы</h3><div class="looks-grid">${S.looks.map((l) => `<button class="look-card" data-act="look-open" data-id="${l.id}">${S.urls[l.photoKey] ? `<img src="${S.urls[l.photoKey]}" alt="">` : ""}<span><b>${esc(l.title)}</b><span class="muted small">${l.items.length} ${plural(l.items.length, "вещь", "вещи", "вещей")}</span></span></button>`).join("")}</div></div>`;
+  return h;
+}
+function shopItem(it, n) {
+  const c = COL[it.color];
+  const pal = analysis()?.palette || [];
+  const fit = !c ? "" : c.kind === "avoid" ? (["top", "outer", "dress"].includes(it.cat) ? '<span class="pill bad">не у лица</span>' : '<span class="pill warn">не твой цвет</span>') : pal.includes(it.color) ? '<span class="pill">в твоей палитре</span>' : "";
+  const m = lookMatches(it);
+  const inWish = S.wishlist.some((w) => w.fromLook === it.query && !w.done);
+  return `<div class="shop-item">
+    <div class="row between" style="align-items:flex-start;flex-wrap:nowrap;gap:10px"><div class="row" style="gap:10px;flex-wrap:nowrap;align-items:flex-start"><span class="lg-n">${n + 1}</span><span class="stack" style="gap:2px"><b>${esc(it.name)}</b><span class="muted small">${esc(CATT[it.cat] || "")}${c ? ` · <i class="dot" style="background:${c.hex}"></i> ${esc(c.t)}` : ""}</span></span></div>${fit}</div>
+    ${it.details ? `<p class="small" style="margin:0">${esc(it.details)}</p>` : ""}
+    ${it.links.length ? `<ul class="plinks">${it.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(SHOPS[l.shop].title)}: ${esc(l.title || "товар")}${l.price ? ` · ${esc(l.price)}` : ""} ↗</a></li>`).join("")}</ul>` : ""}
+    <div class="row" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(it.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>
+    <span class="muted small">Запрос: «${esc(it.query)}»</span>
+    <div class="row between" style="gap:8px">${m.list.length ? `<span class="stack" style="gap:4px"><span class="small muted">${m.exact ? "У тебя уже есть похожее" : "Можно заменить своим"}</span>${miniRow(m.list.map((x) => x.id))}</span>` : '<span class="small muted">Похожего в гардеробе нет</span>'}
+      <button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="look-wish" data-n="${n}"${inWish ? " disabled" : ""}>${inWish ? "В вишлисте" : "В вишлист"}</button></div>
+  </div>`;
+}
+async function setLookFile(file) {
+  if (!file || !/^image\//.test(file.type)) { toast("Нужна картинка: JPG, PNG или WebP"); return; }
+  try {
+    const b = await downscale(file, 1400);
+    if (S.lookImg) URL.revokeObjectURL(S.lookImg.url);
+    S.lookImg = { blob: b, url: URL.createObjectURL(b) }; S.lookRes = null; if (S.br?.kind === "look") S.br = null; render();
+  } catch { toast("Не получилось открыть эту картинку"); }
+}
+
 /* ---------- события ---------- */
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("button");
@@ -893,6 +962,35 @@ document.addEventListener("click", async (e) => {
       S.tab = "wardrobe"; S.edit = "new"; S.draft = { ...blankDraft(), name: w.key ? "" : w.title, cat: w.cat || "top", color: w.color || "black" };
       toast("Добавь купленную вещь в гардероб"); render(); window.scrollTo(0, 0); return;
     }
+    case "look-go": openBridge("look", lookPrompt()); return;
+    case "look-reset": case "look-new": if (S.lookImg && !S.lookRes?.photoKey) URL.revokeObjectURL(S.lookImg.url); S.lookImg = null; S.lookRes = null; if (S.br?.kind === "look") S.br = null; render(); return;
+    case "look-save": {
+      const r = S.lookRes; if (!r || !S.lookImg) return;
+      const key = "look-" + newId();
+      await store.put("photos", S.lookImg.blob, key);
+      S.urls[key] = S.lookImg.url; S.lookImg = null;
+      const saved = { ...r, id: newId(), photoKey: key };
+      S.looks = [saved, ...S.looks]; S.lookRes = saved;
+      await saveKv("looks", S.looks); toast("Разбор сохранён"); render(); return;
+    }
+    case "look-open": { const l = S.looks.find((x) => x.id === d.id); if (l) { S.lookRes = l; S.lookImg = null; render(); window.scrollTo(0, 0); } return; }
+    case "look-del": {
+      const l = S.looks.find((x) => x.id === d.id); if (!l) return;
+      S.looks = S.looks.filter((x) => x.id !== d.id); await saveKv("looks", S.looks);
+      store.del("photos", l.photoKey).catch(() => {}); dropUrl(l.photoKey); S.lookRes = null; toast("Разбор удалён"); render(); return;
+    }
+    case "look-wish": {
+      const it = S.lookRes?.items[+d.n]; if (!it) return;
+      S.wishlist = [...S.wishlist, { id: newId(), title: it.name, cat: it.cat, color: it.color, fromLook: it.query, done: false, created_at: Date.now() }];
+      await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
+    }
+    case "look-build": {
+      const r = S.lookRes; if (!r) return;
+      const ids = [];
+      for (const it of r.items) { const m = lookMatches(it); if (m.list[0] && !ids.includes(m.list[0].id)) ids.push(m.list[0].id); }
+      if (ids.length < 2) { toast("В гардеробе мало похожих вещей"); return; }
+      tryOutfit({ items: ids }); toast("Собрала из похожих вещей, проверь в конструкторе"); return;
+    }
     case "cap-preset": S.cap.preset = d.k; render(); return;
     case "cap-season": S.cap.season = d.k; render(); return;
     case "cap-style": { const a = S.cap.styles, i = a.indexOf(d.k); i >= 0 ? a.splice(i, 1) : a.push(d.k); render(); return; }
@@ -943,6 +1041,7 @@ document.addEventListener("submit", (e) => {
 document.addEventListener("change", (e) => {
   const id = e.target.id;
   if (id === "f-photo" && e.target.files?.[0]) setFile(e.target.files[0]);
+  if (id === "look-in" && e.target.files?.[0]) setLookFile(e.target.files[0]);
   if (id === "selfie-in" && e.target.files?.length) addSelfies(e.target.files);
   if (id === "import-in" && e.target.files?.[0]) {
     e.target.files[0].text().then((t) => { try { S.importConfirm = JSON.parse(t); } catch { toast("Файл не похож на копию гардероба"); } render(); });
@@ -959,9 +1058,9 @@ document.addEventListener("input", (e) => {
   if (/^r-/.test(e.target.id)) S.req[e.target.id.slice(2)] = e.target.value;
   if (e.target.id === "br-answer" && S.br) S.br.answer = e.target.value;
 });
-document.addEventListener("dragover", (e) => { const z = e.target.closest?.("#drop"); if (z) { e.preventDefault(); z.classList.add("over"); } });
+document.addEventListener("dragover", (e) => { if (e.target.closest?.(".look-drop")) e.preventDefault(); const z = e.target.closest?.("#drop"); if (z) { e.preventDefault(); z.classList.add("over"); } });
 document.addEventListener("dragleave", (e) => { e.target.closest?.("#drop")?.classList.remove("over"); });
-document.addEventListener("drop", (e) => { const z = e.target.closest?.("#drop"); if (z) { e.preventDefault(); z.classList.remove("over"); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); } });
+document.addEventListener("drop", (e) => { const lz = e.target.closest?.(".look-drop"); if (lz) { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) setLookFile(f); return; } const z = e.target.closest?.("#drop"); if (z) { e.preventDefault(); z.classList.remove("over"); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); } });
 
 /* ---------- запуск ---------- */
 persist();

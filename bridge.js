@@ -197,3 +197,66 @@ export function parseOutfits(text, map) {
   if (!outfits.length) throw new Error("В ответе нет образов из твоих вещей. Проверь, что скопирован ответ на этот запрос.");
   return { outfits, tip: str(r.tip, 300) };
 }
+
+/* ---------- разбор коллажа образа ---------- */
+export const SHOPS = {
+  wb: { title: "Wildberries", host: /(^|\.)wildberries\.ru$/, search: (q) => `https://www.wildberries.ru/catalog/0/search.aspx?search=${encodeURIComponent(q)}` },
+  ozon: { title: "Ozon", host: /(^|\.)ozon\.ru$/, search: (q) => `https://www.ozon.ru/search/?text=${encodeURIComponent(q)}` },
+  ym: { title: "Яндекс Маркет", host: /(^|\.)market\.yandex\.ru$/, search: (q) => `https://market.yandex.ru/search?text=${encodeURIComponent(q)}` },
+};
+
+export function lookPrompt() {
+  return `Я прикрепляю картинку: коллаж образа (одежда, обувь, аксессуары). Ты стилист-байер. Разбери образ на отдельные вещи и помоги найти такие же или похожие на Wildberries, Ozon и Яндекс Маркете. Отвечай по-русски.
+
+Для каждой вещи на картинке (и одежды, и аксессуаров) укажи:
+- что это и чем она узнаваема (фасон, материал, фактура, детали);
+- поисковый запрос для маркетплейса по-русски, 3–7 слов, без брендов, как ищут покупатели;
+- где вещь на картинке: координаты её центра x и y от 0 до 1 от левого верхнего угла.
+Если у тебя есть доступ к поиску в интернете, найди для каждой вещи по 1–2 конкретных похожих товара на wildberries.ru, ozon.ru или market.yandex.ru и дай прямые ссылки на карточки товаров. Если поиска нет или товар не нашёлся, оставь links пустым массивом. Не придумывай ссылки.
+
+Категории: ${CATS.map((c) => `${c.id} — ${c.t}`).join(", ")}.
+Цвета: ${colorList}.
+Стили: ${STYLES.map((s) => `${s[0]} — ${s[1]}`).join(", ")}.
+
+Ответь ТОЛЬКО одним JSON-объектом, без текста до и после:
+{
+  "title": "название образа, 2–4 слова",
+  "style": "эстетика образа, например soft grunge или dark academia",
+  "styles": ["1–3 ключа стилей"],
+  "items": [{"name": "что это, 2–4 слова", "cat": "ключ категории", "color": "ключ основного цвета", "details": "фасон и детали, одно предложение", "query": "поисковый запрос", "x": 0.5, "y": 0.3, "links": [{"shop": "wb | ozon | ym", "url": "https://...", "title": "название товара", "price": "цена, если видна"}]}],
+  "tip": "как повторить образ, одно-два предложения"
+}`;
+}
+
+function cleanLink(l) {
+  try {
+    const u = new URL(String(l?.url || ""));
+    if (u.protocol !== "https:") return null;
+    const shop = Object.keys(SHOPS).find((k) => SHOPS[k].host.test(u.hostname));
+    if (!shop) return null;
+    return { shop, url: u.href, title: str(l?.title, 120), price: str(l?.price, 30) };
+  } catch { return null; }
+}
+
+export function parseLook(text) {
+  const r = extractJson(text);
+  const items = arr(r.items).map((it) => ({
+    name: str(it?.name, 60),
+    cat: CAT_KEYS.has(it?.cat) ? it.cat : "acc",
+    color: COLOR_KEYS.has(it?.color) ? it.color : "",
+    details: str(it?.details, 200),
+    query: str(it?.query, 80) || str(it?.name, 60),
+    x: Number.isFinite(Number(it?.x)) ? clamp01(it.x) : null,
+    y: Number.isFinite(Number(it?.y)) ? clamp01(it.y) : null,
+    links: arr(it?.links).map(cleanLink).filter(Boolean).slice(0, 4),
+  })).filter((it) => it.name).slice(0, 20);
+  if (!items.length) throw new Error("В ответе нет вещей из образа. Проверь, что скопирован ответ на этот запрос.");
+  return {
+    title: str(r.title, 60) || "Образ с коллажа",
+    style: str(r.style, 60),
+    styles: uniq(arr(r.styles).filter((s) => STYLE_KEYS.has(s))).slice(0, 3),
+    items,
+    tip: str(r.tip, 300),
+    at: Date.now(),
+  };
+}

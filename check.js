@@ -131,4 +131,23 @@ assert.ok(capItems.some((i) => i.cat === "shoes"));
 assert.ok(capItems.filter((i) => i.cat === "top").length <= 4);
 assert.ok(cap.combos >= 1 && cap.examples.length >= 1);
 
+// разбор коллажа: ссылки только на три магазина и только https
+const B = await import("./bridge.js");
+assert.match(B.lookPrompt(), /Wildberries/);
+const look = B.parseLook('```json\n' + JSON.stringify({ title: "Готика", styles: ["grunge", "xx"], items: [
+  { name: "Широкие брюки в полоску", cat: "bottom", color: "black", query: "широкие брюки в тонкую полоску", x: 0.5, y: 0.6, links: [
+    { shop: "wb", url: "https://www.wildberries.ru/catalog/123/detail.aspx", title: "Брюки" },
+    { shop: "ozon", url: "http://www.ozon.ru/product/1", title: "http нельзя" },
+    { shop: "x", url: "https://evil.example.com/ozon.ru", title: "чужой сайт" },
+    { url: "https://market.yandex.ru/product--x/1", title: "ЯМ" } ] },
+  { name: "Сумка", cat: "шляпа", color: "бордо", x: 3 },
+  { name: "" } ] }) + '\n```');
+assert.equal(look.items.length, 2);
+assert.deepEqual(look.items[0].links.map((l) => l.shop), ["wb", "ym"]);
+assert.equal(look.items[1].cat, "acc");
+assert.equal(look.items[1].x, 1);
+assert.deepEqual(look.styles, ["grunge"]);
+assert.match(B.SHOPS.wb.search("чёрные ботинки"), /wildberries\.ru\/catalog\/0\/search\.aspx\?search=/);
+assert.throws(() => B.parseLook('{"items":[]}'), /нет вещей/);
+
 console.log("OK: все проверки прошли");

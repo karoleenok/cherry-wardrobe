@@ -58,7 +58,8 @@ async function b64ToBlob(dataUrl) {
 export async function exportAll() {
   const [items, outfits, profile] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile")]);
   const photos = {};
-  const keys = [...items.map((it) => it.photo_path), ...(profile?.photos || [])].filter(Boolean);
+  const looks = (await store.get("kv", "looks")) || [];
+  const keys = [...items.map((it) => it.photo_path), ...(profile?.photos || []), ...looks.map((l) => l.photoKey)].filter(Boolean);
   for (const k of keys) {
     const b = await store.get("photos", k);
     if (b) photos[k] = await blobToB64(b);
@@ -74,7 +75,7 @@ export async function importAll(data) {
   for (const it of data.items) await store.put("items", it);
   for (const o of data.outfits || []) await store.put("outfits", o);
   if (data.profile) await store.put("kv", data.profile, "profile");
-  for (const [k, v] of Object.entries(data.kv || {})) if (["settings", "wears", "wishlist", "capsules"].includes(k)) await store.put("kv", v, k);
+  for (const [k, v] of Object.entries(data.kv || {})) if (["settings", "wears", "wishlist", "capsules", "looks"].includes(k)) await store.put("kv", v, k);
   for (const [k, v] of Object.entries(data.photos || {}))
     if (typeof v === "string" && v.startsWith("data:image/")) await store.put("photos", await b64ToBlob(v), k);
 }
