@@ -514,24 +514,19 @@ function viewAnalysis(a) {
     ${pinsBlock(a)}
     ${a.unsure ? `<p class="muted small">Что по фото определить не получилось: ${esc(a.unsure)}</p>` : ""}</div>`;
 }
-function calloutLayer(marks) {
-  if (!marks.length) return "";
-  const cx = marks.reduce((t, m) => t + m.x, 0) / marks.length;
-  const side = (list, x) => {
-    const sorted = [...list].sort((p, q) => p.y - q.y);
-    const gap = 0.09;
-    let prev = -1;
-    const ys = sorted.map((m) => (prev = Math.max(m.y, prev + gap, 0.06)));
-    const over = ys.length ? ys[ys.length - 1] - 0.94 : 0;
-    return sorted.map((m, i) => ({ m, x, y: over > 0 ? Math.max(0.06, ys[i] - over) : ys[i] }));
-  };
-  const placed = [...side(marks.filter((m) => m.x < cx), 0.06), ...side(marks.filter((m) => m.x >= cx), 0.94)];
-  const pct = (v) => (v * 100).toFixed(2);
-  return `<svg class="leads" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      ${placed.map((p) => `<line x1="${pct(p.m.x)}" y1="${pct(p.m.y)}" x2="${pct(p.x)}" y2="${pct(p.y)}" class="lead-line"/>`).join("")}
-    </svg>
-    ${placed.map((p) => `<i class="pt" data-mi="${p.m.n - 1}" role="slider" tabindex="0" aria-label="Метка ${p.m.n}: перетащи, чтобы поправить" style="left:${pct(p.m.x)}%;top:${pct(p.m.y)}%;background:${p.m.hex || "var(--accent)"}"></i><span class="tn" style="left:${pct(p.x)}%;top:${pct(p.y)}%">${p.m.n}</span>`).join("")}`;
+// Метки: только кружок на самом признаке, с номером из списка признаков.
+// Цвет кружка — оттенок, снятый с фото; цифра светлая или тёмная по яркости фона.
+function inkOn(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "#1d1a1b";
+  const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#1d1a1b" : "#fff";
 }
+function calloutLayer(marks) {
+  const pct = (v) => (v * 100).toFixed(2);
+  return marks.map((m) => `<i class="pt" data-mi="${m.n - 1}" role="slider" tabindex="0" aria-label="Метка ${m.n}: ${esc(m.label)}. Перетащи, чтобы поправить" style="left:${pct(m.x)}%;top:${pct(m.y)}%;background:${m.hex || "var(--accent)"};color:${inkOn(m.hex)}">${m.n}</i>`).join("");
+}
+
 const lookMarks = (a, i) => (a.markers || []).map((m, n) => ({ ...m, n: n + 1 })).filter((m) => m.photo === i + 1);
 
 // Перетаскивание точек: во время движения перерисовывается только слой меток,

@@ -215,3 +215,6 @@ a.chip{color:var(--ink);text-decoration:none}
 .look-photo .pt:hover{transform:scale(1.15)}
 .look-photo .pt:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 body.dragging,body.dragging .look-photo .pt{cursor:grabbing;user-select:none}
+/* метки без линий: кружок с номером */
+.look-photo .pt{width:24px;height:24px;margin:-12px 0 0 -12px;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.35);font-family:var(--mono);font-size:11px;font-weight:700;font-style:normal;display:grid;place-items:center;line-height:1}
+.look-photo .pt::before{inset:-8px}
