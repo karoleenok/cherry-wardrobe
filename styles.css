@@ -154,3 +154,54 @@ textarea{resize:vertical;min-height:70px}
 .look-photo .lead-shadow{stroke:rgba(0,0,0,.35);stroke-width:3px;vector-effect:non-scaling-stroke}
 .look-photo .pt{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;border:1.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 .look-photo .tn{position:absolute;width:24px;height:24px;margin:-12px 0 0 -12px;border-radius:50%;background:rgba(29,26,27,.82);color:#fff;border:1.5px solid rgba(255,255,255,.9);font-family:var(--mono);font-size:11px;font-weight:600;font-style:normal;display:grid;place-items:center;backdrop-filter:blur(2px)}
+/* наглядный разбор */
+.an-grid.two{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.sgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:4px}
+.scol{display:grid;gap:4px;padding:6px;border-radius:10px;background:var(--sunk)}
+.scol.mine{background:var(--accent-soft)}
+.scol .sh{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);text-align:center}
+.scell{font-size:12px;text-align:center;padding:4px 2px;border-radius:7px;color:var(--muted)}
+.scell.on{background:var(--accent);color:var(--accent-ink);font-weight:700}
+.scales{display:grid;gap:8px;margin-top:8px}
+.srow{display:grid;grid-template-columns:104px 1fr;gap:10px;align-items:center}
+.srow .sl{font-size:13px;color:var(--muted)}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;background:var(--sunk);border-radius:9px;padding:3px}
+.seg span{font-size:12px;text-align:center;padding:4px 2px;border-radius:7px;color:var(--muted)}
+.seg span.on{background:var(--surface);color:var(--ink);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+@media (max-width:420px){.srow{grid-template-columns:1fr}}
+.chip.tag{cursor:default;background:var(--sunk);border-color:transparent}
+a.chip{color:var(--ink);text-decoration:none}
+.feats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:6px}
+.feat{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.35}
+.feat i{flex:none;width:22px;height:22px;border-radius:50%;border:1px solid rgba(0,0,0,.12);margin-top:2px}
+.feat i.empty{background:repeating-linear-gradient(45deg,var(--sunk) 0 3px,var(--line) 3px 6px)}
+.formula .big-q{font-size:clamp(18px,3vw,24px);line-height:1.2}
+.sw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:10px}
+.swb{display:grid;gap:4px;justify-items:center;text-align:center;font-size:11.5px;line-height:1.2}
+.swb i{width:100%;aspect-ratio:1;border-radius:12px;border:1px solid rgba(0,0,0,.1);position:relative;display:block}
+.swb.x i::after{content:"";position:absolute;inset:0;background:linear-gradient(to top right,transparent calc(50% - 1.5px),rgba(255,255,255,.95) calc(50% - 1.5px),rgba(255,255,255,.95) calc(50% + 1.5px),transparent calc(50% + 1.5px));border-radius:12px}
+.swb.x span{color:var(--muted);text-decoration:line-through}
+.metal{display:inline-flex;align-items:center;gap:6px}
+.metal i{width:18px;height:18px;border-radius:50%;border:1px solid rgba(0,0,0,.12)}
+.tips{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.tip{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px;display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;font-size:14px}
+.pin-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;align-items:start}
+.pin-grid > span, .pin-grid > a{max-width:100%}
+.an-grid.two > *, .an-card{min-width:0}
+.sgrid{gap:4px}
+.scol{padding:5px 3px}
+.scell,.seg span{font-size:11.5px;overflow-wrap:anywhere}
+.srow{grid-template-columns:92px minmax(0,1fr)}
+.sw-grid{grid-template-columns:repeat(auto-fill,minmax(56px,72px))}
+.pin-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+.pin{display:block;aspect-ratio:3/4;border-radius:12px;overflow:hidden;background:var(--sunk);border:1px solid var(--line)}
+.pin img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s ease}
+.pin:hover img{transform:scale(1.04)}
+.pin:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.srow{grid-template-columns:1fr;gap:4px}
+.srow .sl{font-size:12px}
+.scell,.seg span{overflow-wrap:normal;white-space:nowrap}
+.seg span{font-size:12px}
+.scell{font-size:11px}
+.pin-grid{grid-template-columns:repeat(3,minmax(0,1fr));max-width:620px}
+@media (max-width:480px){.pin-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

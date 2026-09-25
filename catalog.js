@@ -58,6 +58,23 @@ export const STYLES = [
 ];
 export const STYLE_KEYS = STYLES.map((s) => s[0]);
 
+// 12 цветотипов: сезон × подтип
+export const SEASON_TYPES = [
+  ["spring", "Весна", [["light_spring", "светлая"], ["warm_spring", "тёплая"], ["bright_spring", "яркая"]]],
+  ["summer", "Лето", [["light_summer", "светлое"], ["cool_summer", "холодное"], ["soft_summer", "мягкое"]]],
+  ["autumn", "Осень", [["soft_autumn", "мягкая"], ["warm_autumn", "тёплая"], ["deep_autumn", "глубокая"]]],
+  ["winter", "Зима", [["deep_winter", "глубокая"], ["cool_winter", "холодная"], ["bright_winter", "яркая"]]],
+];
+export const SEASON_KEYS = SEASON_TYPES.flatMap((s) => s[2].map((x) => x[0]));
+
+// Шкалы для наглядного разбора: ключ, подпись, варианты [ключ, подпись]
+export const SCALES = [
+  ["undertone", "Подтон", [["warm", "тёплый"], ["neutral", "нейтральный"], ["cool", "холодный"]]],
+  ["depth", "Глубина", [["light", "светлая"], ["medium", "средняя"], ["deep", "глубокая"]]],
+  ["contrast", "Контраст", [["low", "низкий"], ["medium", "средний"], ["high", "высокий"]]],
+  ["chroma", "Насыщенность", [["soft", "мягкая"], ["medium", "средняя"], ["clear", "чистая"]]],
+];
+
 export const SEASONS = [
   ["fw", "осень–зима"],
   ["ss", "весна–лето"],

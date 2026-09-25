@@ -2,7 +2,7 @@
 // в claude.ai (вместе с фото), а ответ вставляет обратно. Здесь только чистые функции:
 // составить запрос и разобрать ответ. Их же проверяет scripts/check.js.
 
-import { CATS, COLORS, STYLES } from "./catalog.js";
+import { CATS, COLORS, STYLES, SEASON_KEYS, SCALES } from "./catalog.js";
 
 export const CHAT_URL = "https://claude.ai/new";
 
@@ -57,7 +57,7 @@ export function analyzePrompt(nPhotos = 0) {
 
 Ответь ТОЛЬКО одним JSON-объектом, без текста до и после:
 {
-  "summary": "2–3 предложения: главное о типаже и стиле",
+  "summary": "1–2 коротких предложения: главное о типаже и стиле",
   "colortype": {"name": "сезон и подтип, например «мягкое Лето»", "undertone": "подтон кожи", "eyes": "цвет глаз", "hair": "цвет волос: натуральный или окрашенный, какой оттенок идёт", "contrast": "низкий / средний / высокий и почему"},
   "type": {"name": "типаж, например soft natural / classic / dramatic / gamine / romantic / ingénue", "features": "1–2 предложения о чертах и что это значит для одежды"},
   "formula": "формула стиля одной фразой",
@@ -67,7 +67,12 @@ export function analyzePrompt(nPhotos = 0) {
   "metal": "серебро / золото / оба",
   "hair": "совет по цвету волос или стрижке (а если есть борода — и по ней), одно предложение",
   "makeup": "совет по уходу и макияжу, если он уместен: брови, кожа, губы или акцент на глаза; 1–2 предложения",
-  "tips": ["3–4 коротких конкретных совета по одежде и аксессуарам"],
+  "tips": ["3–4 совета по одежде и аксессуарам, каждый до 10 слов"],
+  "season": "ключ цветотипа, одно из: ${SEASON_KEYS.join(", ")}",
+  "scales": {${SCALES.map((s) => `"${s[0]}": "${s[2].map((x) => x[0]).join(" | ")}"`).join(", ")}},
+  "type_tags": ["3–5 признаков черт лица, по 1–3 слова, например «мягкие линии», «округлые скулы»"],
+  "wear": "womenswear | menswear | unisex — какой гардероб человек, судя по фото, скорее носит",
+  "pinterest": ["3–4 поисковых запроса на английском для Pinterest с образами под этот типаж и стиль"],
   "unsure": "что по фото определить нельзя, или пустая строка"${markSchema}
 }`;
 }
@@ -91,6 +96,11 @@ export function parseAnalysis(text, nPhotos = 0) {
     hair: str(r.hair, 300),
     makeup: str(r.makeup, 400),
     tips: arr(r.tips).map((x) => str(x, 200)).filter(Boolean).slice(0, 5),
+    season: SEASON_KEYS.includes(r.season) ? r.season : "",
+    scales: Object.fromEntries(SCALES.map(([k, , opts]) => [k, opts.some((o) => o[0] === r.scales?.[k]) ? r.scales[k] : ""])),
+    type_tags: arr(r.type_tags).map((x) => str(x, 40)).filter(Boolean).slice(0, 5),
+    wear: ["womenswear", "menswear", "unisex"].includes(r.wear) ? r.wear : "unisex",
+    pinterest: arr(r.pinterest).map((x) => str(x, 80)).filter(Boolean).slice(0, 4),
     unsure: str(r.unsure, 300),
     markers: nPhotos > 0 ? arr(r.markers)
       .map((m) => ({

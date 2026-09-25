@@ -1,5 +1,6 @@
 import { store, byNewest, persist, exportAll, importAll } from "./db.js";
-import { CATS, COLORS, STYLES, SEASONS } from "./catalog.js";
+import { CATS, COLORS, STYLES, SEASONS, SEASON_TYPES, SCALES } from "./catalog.js";
+import { PINS } from "./pins.js";
 import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits } from "./bridge.js";
 
 /* ---------- справочники ---------- */
@@ -447,28 +448,72 @@ function viewOnboarding() {
     ${analyzeControls()}
     <button class="btn ghost" style="justify-self:start" data-act="skip-onb">Пропустить и сразу к вещам</button></div>`;
 }
+const SEASON_NAME = Object.fromEntries(SEASON_TYPES.flatMap(([, t, subs]) => subs.map(([k, st]) => [k, `${t[0].toUpperCase() + t.slice(1)} ${st}`])));
+function seasonGrid(sel) {
+  return '<div class="sgrid">' + SEASON_TYPES.map(([key, title, subs]) => {
+    const mine = subs.some((x) => x[0] === sel);
+    return `<div class="scol${mine ? " mine" : ""}"><span class="sh">${title}</span>${subs.map(([k, t]) => `<span class="scell${k === sel ? " on" : ""}">${t}</span>`).join("")}</div>`;
+  }).join("") + "</div>";
+}
+function scaleRows(a) {
+  const sc = a.scales || {};
+  if (!SCALES.some(([k]) => sc[k])) return "";
+  return '<div class="scales">' + SCALES.map(([k, label, opts]) => {
+    const v = sc[k];
+    return `<div class="srow"><span class="sl">${label}</span><span class="seg">${opts.map(([o, t]) => `<span class="${o === v ? "on" : ""}">${t}</span>`).join("")}</span></div>`;
+  }).join("") + "</div>";
+}
+function swatches(keys, crossed) {
+  return '<div class="sw-grid">' + (keys || []).filter((k) => COL[k]).map((k) => `<span class="swb${crossed ? " x" : ""}"><i style="background:${COL[k].hex}"></i><span>${esc(COL[k].t)}</span></span>`).join("") + "</div>";
+}
+function metalChip(m) {
+  const t = String(m || "").toLowerCase();
+  const sil = t.includes("серебр"), gold = t.includes("зол");
+  const bg = sil && gold ? "linear-gradient(135deg,#d9dde2 50%,#d4b264 50%)" : gold ? "linear-gradient(135deg,#f1d98f,#b8913a)" : "linear-gradient(135deg,#f4f5f7,#aab0b8)";
+  return m ? `<span class="metal"><i style="background:${bg}"></i>${esc(m)}</span>` : "";
+}
+function featureChips(a) {
+  const ct = a.colortype || {};
+  const hexOf = (kind) => (a.markers || []).find((m) => m.kind === kind && m.hex)?.hex;
+  const rows = [["Кожа", ct.undertone, hexOf("skin")], ["Глаза", ct.eyes, hexOf("eyes")], ["Волосы", ct.hair, hexOf("hair")], ["Контраст", ct.contrast, null]].filter((r) => r[1]);
+  return '<div class="feats">' + rows.map(([l, v, h]) => `<div class="feat">${h ? `<i style="background:${h}"></i>` : '<i class="empty"></i>'}<span><span class="muted small">${l}</span><br>${esc(v)}</span></div>`).join("") + "</div>";
+}
+function pinsBlock(a) {
+  const set = PINS[a.season];
+  let ids = [];
+  if (set) ids = a.wear === "menswear" ? set.m : a.wear === "womenswear" ? set.w : [...(set.w || []).slice(0, 3), ...(set.m || []).slice(0, 3)];
+  ids = (ids || []).filter((x) => Array.isArray(x) && x[1]).slice(0, 6);
+  const qs = a.pinterest?.length ? a.pinterest : a.season ? [`${a.season.replace("_", " ")} outfit`] : [];
+  if (!ids.length && !qs.length) return "";
+  return `<div class="an-card pins-card"><div class="row between"><span class="k">Образы на Pinterest</span>${a.season ? `<span class="muted small">${esc(SEASON_NAME[a.season] || "")}</span>` : ""}</div>
+    ${ids.length ? `<div class="pin-grid">${ids.map(([id, img]) => `<a class="pin" href="https://www.pinterest.com/pin/${encodeURIComponent(id)}/" target="_blank" rel="noopener" aria-label="Открыть пин на Pinterest"><img src="https://i.pinimg.com/474x/${esc(img)}" alt="" loading="lazy" referrerpolicy="no-referrer"></a>`).join("")}</div><span class="muted small">Примеры подобраны по твоему цветотипу. Нажми на фото, чтобы открыть пин.</span>` : ""}
+    ${qs.length ? `<div class="chips">${qs.map((q) => `<a class="chip" href="https://www.pinterest.com/search/pins/?q=${encodeURIComponent(q)}" target="_blank" rel="noopener">${esc(q)} ↗</a>`).join("")}</div>` : ""}
+  </div>`;
+}
 function viewAnalysis(a) {
-  const chips = (keys, warn) => '<div class="chips">' + (keys || []).filter((k) => COL[k]).map((k) => `<span class="chip" style="cursor:default${warn ? ";color:var(--warn)" : ""}"><i class="dot" style="background:${COL[k].hex}"></i>${esc(COL[k].t)}</span>`).join("") + "</div>";
   const ct = a.colortype || {}, ty = a.type || {};
-  return `<div class="an">${viewLook(a)}${a.summary ? `<p class="lead">${esc(a.summary)}</p>` : ""}
-    <div class="an-grid">
-      <div class="an-card"><span class="k">Цветотип</span><b>${esc(ct.name || "—")}</b><p><span class="muted">Подтон:</span> ${esc(ct.undertone)}</p><p><span class="muted">Глаза:</span> ${esc(ct.eyes)}</p><p><span class="muted">Волосы:</span> ${esc(ct.hair)}</p><p><span class="muted">Контраст:</span> ${esc(ct.contrast)}</p></div>
-      <div class="an-card"><span class="k">Типаж внешности</span><b>${esc(ty.name || "—")}</b><p>${esc(ty.features)}</p></div>
-      <div class="an-card"><span class="k">Формула стиля</span><b>${esc(a.formula || "—")}</b>${a.aesthetics?.length ? `<p class="muted">${esc(a.aesthetics.join(" · "))}</p>` : ""}</div>
+  return `<div class="an">${viewLook(a)}
+    ${a.summary ? `<p class="lead">${esc(a.summary)}</p>` : ""}
+    <div class="an-grid two">
+      <div class="an-card"><span class="k">Цветотип</span><b>${esc(ct.name || SEASON_NAME[a.season] || "—")}</b>${a.season ? seasonGrid(a.season) : ""}${scaleRows(a)}</div>
+      <div class="an-card"><span class="k">Типаж внешности</span><b>${esc(ty.name || "—")}</b>
+        ${a.type_tags?.length ? `<div class="chips">${a.type_tags.map((t) => `<span class="chip tag">${esc(t)}</span>`).join("")}</div>` : ""}
+        ${ty.features ? `<p class="small">${esc(ty.features)}</p>` : ""}
+        ${featureChips(a)}</div>
     </div>
-    <div class="an-grid">
-      <div class="an-card"><span class="k">Твоя палитра</span>${chips(a.palette)}<p class="muted small">Металл: ${esc(a.metal)}</p></div>
-      <div class="an-card"><span class="k">Лучше не у лица</span>${chips(a.avoid, true)}</div>
+    <div class="an-card formula"><span class="k">Формула стиля</span><b class="big-q">${esc(a.formula || "—")}</b>${a.aesthetics?.length ? `<div class="chips">${a.aesthetics.map((t) => `<a class="chip" href="https://www.pinterest.com/search/pins/?q=${encodeURIComponent(t + " outfit")}" target="_blank" rel="noopener">${esc(t)}</a>`).join("")}</div>` : ""}</div>
+    <div class="an-grid two">
+      <div class="an-card"><span class="k">Твоя палитра</span>${swatches(a.palette)}<div class="row small" style="gap:8px"><span class="muted">Металл</span>${metalChip(a.metal)}</div></div>
+      <div class="an-card"><span class="k">Лучше не у лица</span>${swatches(a.avoid, true)}<p class="muted small">Такие цвета можно носить в обуви, низе или сумке.</p></div>
     </div>
-    <div class="an-grid">
+    ${a.tips?.length ? `<div class="tips">${a.tips.map((t, n) => `<div class="tip"><span class="lg-n">${n + 1}</span><span>${esc(t)}</span></div>`).join("")}</div>` : ""}
+    ${a.hair || a.makeup ? `<div class="an-grid two">
       ${a.hair ? `<div class="an-card"><span class="k">Волосы</span><p>${esc(a.hair)}</p></div>` : ""}
       ${a.makeup ? `<div class="an-card"><span class="k">Уход и макияж</span><p>${esc(a.makeup)}</p></div>` : ""}
-      ${a.tips?.length ? `<div class="an-card"><span class="k">Советы</span><ul>${a.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
-    </div>
+    </div>` : ""}
+    ${pinsBlock(a)}
     ${a.unsure ? `<p class="muted small">Что по фото определить не получилось: ${esc(a.unsure)}</p>` : ""}</div>`;
 }
-// Метки как выноски: на самом признаке только маленькая точка, а номер вынесен
-// тонкой линией к краю фото (левее лица — влево, правее — вправо), чтобы не закрывать лицо.
 function calloutLayer(marks) {
   if (!marks.length) return "";
   const cx = marks.reduce((t, m) => t + m.x, 0) / marks.length;

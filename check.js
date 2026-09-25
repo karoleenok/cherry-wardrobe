@@ -69,4 +69,15 @@ assert.equal(withMarks.markers.length, 2);
 assert.deepEqual([withMarks.markers[1].x, withMarks.markers[1].y, withMarks.markers[1].kind], [1, 0, "features"]);
 assert.deepEqual(parseAnalysis('{"colortype":{"name":"Лето"},"markers":[{"photo":1,"x":0.5,"y":0.5,"label":"x"}]}', 0).markers, []);
 
+// Наглядные поля разбора: сезон, шкалы, теги, гардероб, запросы для Pinterest
+const vis = parseAnalysis(JSON.stringify({ colortype: { name: "Лето" }, season: "soft_summer", scales: { undertone: "cool", depth: "очень", contrast: "medium" }, type_tags: ["мягкие линии"], wear: "menswear", pinterest: ["soft summer men outfit"] }));
+assert.equal(vis.season, "soft_summer");
+assert.deepEqual(vis.scales, { undertone: "cool", depth: "", contrast: "medium", chroma: "" });
+assert.equal(vis.wear, "menswear");
+assert.equal(parseAnalysis('{"colortype":{"name":"x"},"season":"summer","wear":"?"}').season, "");
+assert.equal(parseAnalysis('{"colortype":{"name":"x"},"wear":"?"}').wear, "unisex");
+const { PINS } = await import("./pins.js");
+const { SEASON_KEYS } = await import("./catalog.js");
+for (const k of SEASON_KEYS) assert.ok(PINS[k]?.w?.length && PINS[k]?.m?.length, "нет пинов для " + k);
+
 console.log("OK: все проверки прошли");
