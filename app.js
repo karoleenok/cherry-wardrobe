@@ -467,6 +467,26 @@ function viewAnalysis(a) {
     </div>
     ${a.unsure ? `<p class="muted small">Что по фото определить не получилось: ${esc(a.unsure)}</p>` : ""}</div>`;
 }
+// Метки как выноски: на самом признаке только маленькая точка, а номер вынесен
+// тонкой линией к краю фото (левее лица — влево, правее — вправо), чтобы не закрывать лицо.
+function calloutLayer(marks) {
+  if (!marks.length) return "";
+  const cx = marks.reduce((t, m) => t + m.x, 0) / marks.length;
+  const side = (list, x) => {
+    const sorted = [...list].sort((p, q) => p.y - q.y);
+    const gap = 0.09;
+    let prev = -1;
+    const ys = sorted.map((m) => (prev = Math.max(m.y, prev + gap, 0.06)));
+    const over = ys.length ? ys[ys.length - 1] - 0.94 : 0;
+    return sorted.map((m, i) => ({ m, x, y: over > 0 ? Math.max(0.06, ys[i] - over) : ys[i] }));
+  };
+  const placed = [...side(marks.filter((m) => m.x < cx), 0.06), ...side(marks.filter((m) => m.x >= cx), 0.94)];
+  const pct = (v) => (v * 100).toFixed(2);
+  return `<svg class="leads" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      ${placed.map((p) => `<line x1="${pct(p.m.x)}" y1="${pct(p.m.y)}" x2="${pct(p.x)}" y2="${pct(p.y)}" class="lead-shadow"/><line x1="${pct(p.m.x)}" y1="${pct(p.m.y)}" x2="${pct(p.x)}" y2="${pct(p.y)}" class="lead-line"/>`).join("")}
+    </svg>
+    ${placed.map((p) => `<i class="pt" style="left:${pct(p.m.x)}%;top:${pct(p.m.y)}%;background:${p.m.hex || "var(--accent)"}"></i><span class="tn" style="left:${pct(p.x)}%;top:${pct(p.y)}%">${p.m.n}</span>`).join("")}`;
+}
 function viewLook(a) {
   const photos = (S.profile?.photos || []).filter((k) => S.urls[k]);
   if (!photos.length) return "";
@@ -475,7 +495,7 @@ function viewLook(a) {
   return `<div class="look">
     <div class="stack" style="gap:8px">
       <div class="pip look-photo"><img src="${S.urls[photos[i]]}" alt="Фото ${i + 1} с метками признаков">
-        ${marks.map((m) => `<i class="mk num" style="left:${(m.x * 100).toFixed(1)}%;top:${(m.y * 100).toFixed(1)}%;background:${m.hex || "var(--accent)"}"><span>${m.n}</span></i>`).join("")}
+        ${calloutLayer(marks)}
       </div>
       ${photos.length > 1 ? `<div class="thumbs">${photos.map((k, j) => `<button data-act="look" data-i="${j}" aria-pressed="${j === i}" aria-label="Фото ${j + 1}"><img src="${S.urls[k]}" alt=""></button>`).join("")}</div>` : ""}
     </div>
