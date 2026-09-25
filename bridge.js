@@ -3,6 +3,7 @@
 // составить запрос и разобрать ответ. Их же проверяет scripts/check.js.
 
 import { CATS, COLORS, STYLES, SEASON_KEYS, SCALES } from "./catalog.js";
+import { KIBBE_KEYS, ARCHETYPE_KEYS, knowledgeForPrompt } from "./knowledge.js";
 
 export const CHAT_URL = "https://claude.ai/new";
 
@@ -42,7 +43,30 @@ export const MARK_KINDS = {
 const SAMPLE_KINDS = new Set(["skin", "eyes", "hair", "brows", "lips"]);
 export const sampleable = (kind) => SAMPLE_KINDS.has(kind);
 
-export function analyzePrompt(nPhotos = 0) {
+// Вопросы анкеты точного режима: [ключ, вопрос, варианты].
+export const QUIZ = [
+  ["hair_nat", "Натуральный цвет волос (без окрашивания)", ["светлый русый / блонд", "русый", "рыжий / медный", "каштановый", "тёмный / чёрный", "седой"]],
+  ["hair_child", "Цвет волос в детстве", ["очень светлый", "русый", "рыжий", "тёмный"]],
+  ["veins", "Цвет вен на запястье при дневном свете", ["голубые / фиолетовые", "зеленоватые", "и те и другие", "не понять"]],
+  ["sun", "Как кожа реагирует на солнце", ["быстро краснеет и обгорает", "сначала краснеет, потом загорает", "легко загорает", "почти не загорает, сразу темнеет"]],
+  ["metal", "Что лучше смотрится на коже", ["серебро", "золото", "одинаково"]],
+  ["white", "Что освежает лицо", ["чистый белый", "молочный / айвори", "не вижу разницы"]],
+  ["height", "Рост", ["до 160 см", "160–170 см", "170–180 см", "выше 180 см"]],
+  ["frame", "Кость и сложение", ["узкая, изящная", "средняя", "широкая, крупная"]],
+];
+
+const DR = { cool: "холодный", warm: "тёплый", soft: "мягкая", clear: "чистая", light: "светлая", deep: "глубокая" };
+
+export function analyzePrompt(nPhotos = 0, ctx = {}) {
+  const quizLines = QUIZ.map(([k, q]) => (ctx.quiz?.[k] ? `- ${q}: ${ctx.quiz[k]}` : "")).filter(Boolean);
+  const qualityLines = (ctx.quality || []).map((fl, i) => (fl?.length ? `- фото ${i + 1}: ${fl.join("; ")}` : "")).filter(Boolean);
+  const drape = ctx.drape && Object.values(ctx.drape).some(Boolean)
+    ? `\nРезультат цифровой драпировки (человек сам выбирал, с каким цветом у лица выглядит свежее): подтон — ${DR[ctx.drape.undertone] || "не ясно"}, насыщенность — ${DR[ctx.drape.chroma] || "не ясно"}, глубина — ${DR[ctx.drape.depth] || "не ясно"}. Учитывай это как важный признак; если он расходится с фото, объясни, чему доверяешь больше.` : "";
+  const extra = [
+    quizLines.length ? `\nОтветы человека о себе (они надёжнее фото там, где фото искажает цвет):\n${quizLines.join("\n")}` : "",
+    qualityLines.length ? `\nАвтоматическая проверка фото нашла:\n${qualityLines.join("\n")}\nДелай поправку на это при оценке подтона.` : "",
+    drape,
+  ].join("");
   const marks = nPhotos > 0 ? `
 
 Фото пронумерованы по порядку прикрепления: от 1 до ${nPhotos}. В поле markers отметь на фото признаки, на которых основан разбор цветотипа и типажа: 3–6 меток на каждое фото, где хорошо видно лицо. Для каждой метки укажи номер фото, координаты точки (x и y от 0 до 1 от левого верхнего угла фото), вид признака и короткую подпись. Точку ставь прямо на признак: skin — на щеку или лоб, eyes — на радужку, hair — на прядь, brows — на бровь, lips — на губы, face/features/contrast — на соответствующую часть лица.` : "";
@@ -52,6 +76,11 @@ export function analyzePrompt(nPhotos = 0) {
 Это может быть человек любого пола. Не предполагай пол заранее: ориентируйся на то, что видно на фото, и подбирай рекомендации под этого человека. Не советуй по умолчанию платья, юбки, каблуки или макияж; предлагай их, только если они уместны для этого образа. Обращайся на «ты» в нейтральной форме, без окончаний, выдающих пол.
 Для типажа используй систему, которая подходит человеку (например, Kibbe или её аналоги для мужских типажей) и коротко объясни, что это значит для одежды.
 Говори уважительно и только о цвете, чертах лица и стиле: не оценивай внешность и фигуру. Если что-то по фото не видно (свет, фильтры, макияж), пиши «похоже на» и укажи это в unsure.
+
+${knowledgeForPrompt()}
+${extra}
+
+Работай пошагово: оцени каждое фото отдельно, сравни выводы между фото, затем дай итог. Если фото противоречат друг другу, скажи это в evidence и снизь уверенность. Всегда называй второй по вероятности вариант цветотипа и типажа.
 
 Цвета для palette и avoid бери ТОЛЬКО из этих ключей: ${colorList}.${marks}
 
@@ -73,6 +102,12 @@ export function analyzePrompt(nPhotos = 0) {
   "type_tags": ["3–5 признаков черт лица, по 1–3 слова, например «мягкие линии», «округлые скулы»"],
   "wear": "womenswear | menswear | unisex — какой гардероб человек, судя по фото, скорее носит",
   "pinterest": ["3–4 поисковых запроса на английском для Pinterest с образами под этот типаж и стиль"],
+  "season_alt": "второй по вероятности ключ цветотипа",
+  "kibbe": "ключ типажа Kibbe, одно из: ${KIBBE_KEYS.join(", ")}",
+  "kibbe_alt": "второй по вероятности ключ типажа",
+  "archetypes": ["1–2 ключа стилевых архетипов из: ${ARCHETYPE_KEYS.join(", ")}"],
+  "confidence": {"season": "high | medium | low", "type": "high | medium | low"},
+  "evidence": ["3–5 коротких доводов: на что опирается вывод и что по фото не видно"],
   "unsure": "что по фото определить нельзя, или пустая строка"${markSchema}
 }`;
 }
@@ -101,6 +136,12 @@ export function parseAnalysis(text, nPhotos = 0) {
     type_tags: arr(r.type_tags).map((x) => str(x, 40)).filter(Boolean).slice(0, 5),
     wear: ["womenswear", "menswear", "unisex"].includes(r.wear) ? r.wear : "unisex",
     pinterest: arr(r.pinterest).map((x) => str(x, 80)).filter(Boolean).slice(0, 4),
+    season_alt: SEASON_KEYS.includes(r.season_alt) && r.season_alt !== r.season ? r.season_alt : "",
+    kibbe: KIBBE_KEYS.includes(r.kibbe) ? r.kibbe : "",
+    kibbe_alt: KIBBE_KEYS.includes(r.kibbe_alt) && r.kibbe_alt !== r.kibbe ? r.kibbe_alt : "",
+    archetypes: uniq(arr(r.archetypes).filter((k) => ARCHETYPE_KEYS.includes(k))).slice(0, 2),
+    confidence: { season: ["high", "medium", "low"].includes(r.confidence?.season) ? r.confidence.season : "", type: ["high", "medium", "low"].includes(r.confidence?.type) ? r.confidence.type : "" },
+    evidence: arr(r.evidence).map((x) => str(x, 200)).filter(Boolean).slice(0, 5),
     unsure: str(r.unsure, 300),
     markers: nPhotos > 0 ? arr(r.markers)
       .map((m) => ({

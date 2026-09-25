@@ -150,4 +150,25 @@ assert.deepEqual(look.styles, ["grunge"]);
 assert.match(B.SHOPS.wb.search("чёрные ботинки"), /wildberries\.ru\/catalog\/0\/search\.aspx\?search=/);
 assert.throws(() => B.parseLook('{"items":[]}'), /нет вещей/);
 
+// точный режим: качество фото, драпировка, новые поля разбора
+const px = (r, g, b, n = 400) => { const a = new Uint8ClampedArray(n * 4); for (let i = 0; i < n; i++) a.set([r, g, b, 255], i * 4); return a; };
+assert.ok(L.photoQuality(px(200, 200, 200), 1200, 1600).ok, "нейтральное светлое фото — ок");
+assert.ok(L.photoQuality(px(30, 30, 30), 1200, 1600).flags.some((f) => f[0] === "dark"));
+assert.ok(L.photoQuality(px(230, 190, 140), 1200, 1600).flags.some((f) => f[0] === "warm"), "жёлтый свет");
+assert.ok(L.photoQuality(px(150, 170, 215), 1200, 1600).flags.some((f) => f[0] === "cool"), "синий свет");
+assert.ok(L.photoQuality(px(200, 200, 200), 300, 400).flags.some((f) => f[0] === "small"));
+const ds = L.drapeSummary({ 0: "cool", 1: "cool", 2: "warm", 3: "soft", 4: "clear", 5: "light", 6: "light" });
+assert.deepEqual(ds, { undertone: "cool", chroma: "", depth: "light" });
+const acc = parseAnalysis(JSON.stringify({ colortype: { name: "Лето" }, season: "soft_summer", season_alt: "soft_summer", kibbe: "soft_gamine", kibbe_alt: "romantic", archetypes: ["rebel", "magician", "xx", "lover"], confidence: { season: "high", type: "шум" }, evidence: ["a", "b"] }));
+assert.equal(acc.season_alt, "", "второй вариант не совпадает с первым");
+assert.equal(acc.kibbe, "soft_gamine");
+assert.deepEqual(acc.archetypes, ["rebel", "magician"]);
+assert.deepEqual(acc.confidence, { season: "high", type: "" });
+const KB = await import("./knowledge.js");
+for (const k of SEASON_KEYS) assert.ok(KB.SEASON_KB[k]?.name && KB.SEASON_KB[k].neighbors.every((n) => KB.SEASON_KB[n]), "справочник сезона " + k);
+const promptAcc = analyzePrompt(2, { quiz: { veins: "зеленоватые" }, quality: [["тёплый свет"], []], drape: { undertone: "cool" } });
+assert.match(promptAcc, /КРИТЕРИИ ЦВЕТОТИПА/);
+assert.match(promptAcc, /зеленоватые/);
+assert.match(promptAcc, /подтон — холодный/);
+
 console.log("OK: все проверки прошли");

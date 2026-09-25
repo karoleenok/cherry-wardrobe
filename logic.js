@@ -215,3 +215,60 @@ export function buildCapsule(items, kindOf, { preset = "week", season = "any", s
   const examples = suggestOutfits(chosen, kindOf, { season: "any" }, { n: 5, seed: 7 });
   return { title: P.title, items: chosen.map((i) => i.id), combos, examples: examples.map((e) => e.items), preset };
 }
+
+/* ---------- качество фото для разбора ----------
+   На вход — пиксели RGBA уменьшенного фото. Цвет освещения оцениваем методом «белого участка»:
+   берём 5% самых светлых почти ненасыщенных пикселей (стена, белая одежда, лист бумаги) и сравниваем
+   в них красный и синий. Если таких участков мало, берём среднее по кадру с более мягким порогом. */
+export function photoQuality(data, w, h) {
+  let sum = 0, n = 0, satSum = 0, R = 0, B = 0;
+  const light = [];
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const s = mx ? (mx - mn) / mx : 0, y = 0.299 * r + 0.587 * g + 0.114 * b;
+    sum += y; satSum += s; n++; R += r; B += b;
+    if (s < 0.3 && mx < 250 && y > 90) light.push([y, r, b]);
+  }
+  const brightness = sum / n, sat = satSum / n;
+  let ratio, useNeutral = light.length >= Math.max(20, n * 0.02);
+  if (useNeutral) {
+    light.sort((a, b) => b[0] - a[0]);
+    const top = light.slice(0, Math.max(20, Math.round(light.length * 0.05)));
+    const tr = top.reduce((t, p) => t + p[1], 0), tb = top.reduce((t, p) => t + p[2], 0);
+    ratio = tr / Math.max(1, tb);
+  } else ratio = R / Math.max(1, B);
+  const warmAt = useNeutral ? 1.06 : 1.45, coolAt = useNeutral ? 0.94 : 0.8;
+  const flags = [];
+  if (brightness < 60) flags.push(["dark", "темно: лицо плохо видно"]);
+  if (brightness > 215) flags.push(["bright", "пересвет: теряются оттенки кожи"]);
+  if (ratio > warmAt) flags.push(["warm", "тёплый свет или тёплый фон: кожа будет казаться теплее"]);
+  if (ratio < coolAt) flags.push(["cool", "холодный свет: кожа будет казаться холоднее"]);
+  if (sat > 0.5) flags.push(["filter", "очень насыщенные цвета: возможно, фильтр"]);
+  if (Math.min(w, h) < 500) flags.push(["small", "маленькое фото: мало деталей"]);
+  return { brightness: Math.round(brightness), ratio: +ratio.toFixed(3), sat: +sat.toFixed(2), neutralRef: useNeutral, flags, ok: flags.length === 0 };
+}
+
+/* ---------- цифровая драпировка ----------
+   Пары цветов, отличающиеся одной осью. Человек выбирает, с каким лицо выглядит свежее. */
+export const DRAPE_ROUNDS = [
+  { axis: "undertone", a: { v: "cool", hex: "#c2336e", t: "малиновый" }, b: { v: "warm", hex: "#e2622e", t: "тыквенный" } },
+  { axis: "undertone", a: { v: "cool", hex: "#c9ced6", t: "серебристо-серый" }, b: { v: "warm", hex: "#cdb07a", t: "золотисто-бежевый" } },
+  { axis: "undertone", a: { v: "cool", hex: "#2f5aa8", t: "королевский синий" }, b: { v: "warm", hex: "#2f7d6e", t: "тёплый тил" } },
+  { axis: "chroma", a: { v: "soft", hex: "#b99095", t: "пыльная роза" }, b: { v: "clear", hex: "#e3175f", t: "чистая фуксия" } },
+  { axis: "chroma", a: { v: "soft", hex: "#8fa08d", t: "шалфей" }, b: { v: "clear", hex: "#00a36c", t: "изумруд" } },
+  { axis: "depth", a: { v: "light", hex: "#efd9dc", t: "пудровый" }, b: { v: "deep", hex: "#4e0f1d", t: "винный" } },
+  { axis: "depth", a: { v: "light", hex: "#d6e3f0", t: "светло-голубой" }, b: { v: "deep", hex: "#18264a", t: "тёмно-синий" } },
+];
+
+// Итог драпировки по осям: какой полюс выбирали чаще. "" — поровну или не понятно.
+export function drapeSummary(answers) {
+  const out = {};
+  for (const axis of ["undertone", "chroma", "depth"]) {
+    const votes = {};
+    DRAPE_ROUNDS.forEach((r, i) => { if (r.axis === axis && answers[i]) votes[answers[i]] = (votes[answers[i]] || 0) + 1; });
+    const sorted = Object.entries(votes).filter(([v]) => v !== "same").sort((a, b) => b[1] - a[1]);
+    out[axis] = sorted.length && (sorted.length === 1 || sorted[0][1] > sorted[1][1]) ? sorted[0][0] : "";
+  }
+  return out;
+}

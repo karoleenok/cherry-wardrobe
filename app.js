@@ -1,7 +1,9 @@
 import { store, byNewest, persist, exportAll, importAll } from "./db.js";
 import { CATS, COLORS, STYLES, SEASONS, SEASON_TYPES, SCALES } from "./catalog.js";
 import { PINS } from "./pins.js";
-import { weatherText, weatherNeeds, scoreOutfit, suggestOutfits, countCombos, dayKey, wearStats, wardrobeGaps, CAPSULE_PRESETS, buildCapsule } from "./logic.js";
+import { weatherText, weatherNeeds, scoreOutfit, suggestOutfits, countCombos, dayKey, wearStats, wardrobeGaps, CAPSULE_PRESETS, buildCapsule, photoQuality, DRAPE_ROUNDS, drapeSummary } from "./logic.js";
+import { QUIZ } from "./bridge.js";
+import { SEASON_KB, KIBBE_KB, ARCHETYPES } from "./knowledge.js";
 import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits, SHOPS, lookPrompt, parseLook } from "./bridge.js";
 
 /* ---------- справочники ---------- */
@@ -23,6 +25,7 @@ const S = {
   wears: [], wishlist: [], capsules: [], calMonth: dayKey().slice(0, 7), calDay: null,
   cap: { preset: "week", season: "any", styles: [] }, capResult: null,
   looks: [], lookImg: null, lookRes: null,
+  anMode: "accurate", quiz: {}, drape: null,
   items: [], outfits: [], profile: null, urls: {},
   filter: "all", edit: null, draft: null, delConfirm: null, saving: false, formErr: null,
   build: EMPTY_BUILD(), activeSlot: "top", fwOnly: true,
@@ -100,8 +103,9 @@ async function applyAnswer() {
   try {
     if (b.kind === "analyze") {
       const an = parseAnalysis(b.answer, b.n || 0);
+      const hadNew = S.selfies.length > 0;
       const photos = await saveSelfies(an);
-      await setProfile({ analysis: an, text: null, photos });
+      await setProfile({ analysis: an, text: null, photos, drape: hadNew ? null : S.profile?.drape || null });
       S.br = null; S.tab = "profile"; S.viewPhoto = 0;
       try { sessionStorage.setItem("wd-tab", "profile"); } catch {}
       toast("Типаж определён"); render(); window.scrollTo(0, 0);
@@ -120,7 +124,15 @@ async function applyAnswer() {
 }
 // Сохраняет загруженные фото типажа и снимает с них оттенки в точках меток.
 async function saveSelfies(an) {
-  if (!S.selfies.length) return S.profile?.photos || [];
+  if (!S.selfies.length) {
+    // повторный разбор по уже сохранённым фото: оттенки снимаем с них
+    const keys = S.profile?.photos || [];
+    for (const m of an.markers) {
+      const k = keys[m.photo - 1];
+      if (k && sampleable(m.kind)) { try { const b = await store.get("photos", k); if (b) m.hex = await sampleAt(b, m.x, m.y); } catch {} }
+    }
+    return keys;
+  }
   for (const m of an.markers) {
     const x = S.selfies[m.photo - 1];
     if (x && sampleable(m.kind)) { try { m.hex = await sampleAt(x.blob, m.x, m.y); } catch {} }
@@ -147,16 +159,36 @@ async function sampleAt(blob, fx, fy) {
   const h = (v) => Math.round(v / n).toString(16).padStart(2, "0");
   return "#" + h(R) + h(G) + h(B);
 }
+function analyzeCtx() {
+  if (S.anMode !== "accurate") return {};
+  return { quiz: S.quiz, quality: S.selfies.map((x) => (x.q?.flags || []).map((f) => f[1])), drape: S.profile?.drape || null };
+}
 function refreshAnalyzeBridge() {
-  if (S.br?.kind === "analyze") { S.br.n = S.selfies.length; S.br.prompt = analyzePrompt(S.selfies.length); }
+  if (S.br?.kind === "analyze") { S.br.n = S.selfies.length; S.br.prompt = analyzePrompt(S.selfies.length, analyzeCtx()); }
+}
+async function qualityOf(blob) {
+  const bmp = await createImageBitmap(blob);
+  const k = Math.min(1, 200 / Math.max(bmp.width, bmp.height));
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
+  const g = cv.getContext("2d"); g.drawImage(bmp, 0, 0, cv.width, cv.height);
+  const q = photoQuality(g.getImageData(0, 0, cv.width, cv.height).data, bmp.width, bmp.height);
+  return q;
 }
 async function addSelfies(files) {
   const list = [...files].filter((f) => /^image\//.test(f.type)).slice(0, 5 - S.selfies.length);
-  for (const f of list) { try { const b = await downscale(f, 1200); S.selfies.push({ blob: b, url: URL.createObjectURL(b) }); } catch {} }
+  for (const f of list) {
+    try {
+      let q = null;
+      try { q = await qualityOf(f); } catch {}
+      const b = await downscale(f, 1200);
+      S.selfies.push({ blob: b, url: URL.createObjectURL(b), q });
+    } catch {}
+  }
   refreshAnalyzeBridge(); render();
 }
 function selfieBlock() {
-  return '<div class="selfies">' + S.selfies.map((x, i) => `<div class="selfie"><img src="${x.url}" alt="Фото ${i + 1}"><span class="num">${i + 1}</span><button type="button" class="rm" data-act="selfie-rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`).join("") +
+  return '<div class="selfies">' + S.selfies.map((x, i) => `<div class="selfie${S.anMode === "accurate" && x.q ? (x.q.ok ? " q-ok" : " q-warn") : ""}"><img src="${x.url}" alt="Фото ${i + 1}"><span class="num">${i + 1}</span>${S.anMode === "accurate" && x.q ? `<span class="qbadge" title="${esc(x.q.ok ? "Фото подходит" : x.q.flags.map((f) => f[1]).join("; "))}">${x.q.ok ? "✓" : "!"}</span>` : ""}<button type="button" class="rm" data-act="selfie-rm" data-i="${i}" aria-label="Убрать фото ${i + 1}">×</button></div>`).join("") +
     (S.selfies.length < 5 ? '<label class="selfie add" for="selfie-in">+ фото<br>лицо при дневном свете</label>' : "") + "</div>" +
     '<input class="sr" type="file" id="selfie-in" accept="image/jpeg,image/png,image/webp" multiple>';
 }
@@ -182,8 +214,8 @@ function downscale(file, max = 1000) {
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 async function loadAll() {
   try {
-    const [items, outfits, profile, settings, wears, wishlist, capsules, weather, looks] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile"),
-      store.get("kv", "settings"), store.get("kv", "wears"), store.get("kv", "wishlist"), store.get("kv", "capsules"), store.get("kv", "weather"), store.get("kv", "looks")]);
+    const [items, outfits, profile, settings, wears, wishlist, capsules, weather, looks, quiz] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile"),
+      store.get("kv", "settings"), store.get("kv", "wears"), store.get("kv", "wishlist"), store.get("kv", "capsules"), store.get("kv", "weather"), store.get("kv", "looks"), store.get("kv", "quiz")]);
     S.items = items.sort(byNewest);
     S.outfits = outfits.sort(byNewest);
     S.profile = profile || null;
@@ -193,6 +225,7 @@ async function loadAll() {
     S.capsules = capsules || [];
     S.weather = weather || null;
     S.looks = looks || [];
+    S.quiz = quiz || {};
   } catch (e) {
     console.error(e);
     $("main").innerHTML = '<div class="notice err">Браузер не даёт сохранять данные на этом сайте (например, в режиме инкогнито). Открой сайт в обычном окне.</div>';
@@ -462,8 +495,18 @@ function viewOutfits() {
 /* ---------- типаж ---------- */
 const colNames = (keys) => (keys || []).filter((k) => COL[k]).map((k) => COL[k].t);
 function analyzeControls() {
-  const up = `<div class="stack" style="gap:8px"><span class="small"><b>Твои фото</b> <span class="muted">(необязательно, до 5): на них появятся метки признаков типажа. Фото хранятся только в этом браузере.</span></span>${selfieBlock()}</div>`;
-  return up + (S.br?.kind === "analyze" ? bridgeBox("analyze") : '<div class="row"><button class="btn cherry" data-act="an-go">✦ Определить мой типаж</button></div>');
+  const acc = S.anMode === "accurate";
+  const modes = `<div class="chips" role="group" aria-label="Режим разбора"><button class="chip" data-act="an-mode" data-m="accurate" aria-pressed="${acc}">Точный режим</button><button class="chip" data-act="an-mode" data-m="fast" aria-pressed="${!acc}">Быстрый</button></div>`;
+  const guide = acc ? `<details class="guide" open><summary><b>Как снять фото, чтобы разбор был точным</b></summary><ul>
+      <li>Дневной свет у окна, без прямого солнца и без ламп.</li><li>Без макияжа, фильтров и ретуши, камера без «улучшений».</li>
+      <li>Волосы убраны от лица; если окрашены — ответь на вопрос о натуральном цвете ниже.</li><li>Однотонная светлая одежда или белая ткань у шеи, в кадре белый лист бумаги — эталон белого.</li>
+      <li>Лицо анфас крупно + одно фото в полный рост, чтобы оценить пропорции для типажа.</li></ul></details>` : "";
+  const flagged = S.selfies.filter((x) => x.q && !x.q.ok);
+  const qNote = acc && flagged.length ? `<div class="notice warn small">Проверка фото: ${S.selfies.map((x, i) => (x.q && !x.q.ok ? `фото ${i + 1} — ${x.q.flags.map((f) => f[1]).join(", ")}` : "")).filter(Boolean).join("; ")}. Лучше переснять, иначе Claude сделает поправку, но уверенность будет ниже.</div>` : acc && S.selfies.length ? '<div class="notice small">Проверка фото: свет и цвета в порядке ✓</div>' : "";
+  const quiz = acc ? `<div class="quiz"><span class="small"><b>Пара вопросов о тебе</b> <span class="muted">— они уточняют то, что фото может исказить</span></span>
+    <div class="quiz-grid">${QUIZ.map(([k, q, opts]) => `<label class="f">${esc(q)}<select data-quiz="${k}"><option value="">не знаю</option>${opts.map((o) => `<option${S.quiz[k] === o ? " selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`).join("")}</div></div>` : "";
+  const up = `<div class="stack" style="gap:8px"><span class="small"><b>Твои фото</b> <span class="muted">(${acc ? "2–5 фото" : "необязательно, до 5"}): на них появятся метки признаков типажа. Фото хранятся только в этом браузере.</span></span>${selfieBlock()}${qNote}</div>`;
+  return modes + guide + up + quiz + (S.br?.kind === "analyze" ? bridgeBox("analyze") : `<div class="row"><button class="btn cherry" data-act="an-go">✦ Определить мой типаж</button>${S.profile?.drape ? '<span class="muted small">Результат драпировки тоже учтётся</span>' : ""}</div>`);
 }
 function viewOnboarding() {
   return `<div class="hero"><div class="stack" style="gap:8px"><span class="muted small" style="font-family:var(--mono);letter-spacing:.07em;text-transform:uppercase">Перед стартом</span>
@@ -519,8 +562,8 @@ function viewAnalysis(a) {
   return `<div class="an">${viewLook(a)}
     ${a.summary ? `<p class="lead">${esc(a.summary)}</p>` : ""}
     <div class="an-grid two">
-      <div class="an-card"><span class="k">Цветотип</span><b>${esc(ct.name || SEASON_NAME[a.season] || "—")}</b>${a.season ? seasonGrid(a.season) : ""}${scaleRows(a)}</div>
-      <div class="an-card"><span class="k">Типаж внешности</span><b>${esc(ty.name || "—")}</b>
+      <div class="an-card"><div class="row between"><span class="k">Цветотип</span>${confPill(a.confidence?.season)}</div><b>${esc(ct.name || SEASON_NAME[a.season] || "—")}</b>${a.season_alt ? `<span class="muted small">Второй вариант: ${esc(SEASON_KB[a.season_alt]?.name || a.season_alt)}</span>` : ""}${a.season ? seasonGrid(a.season) : ""}${scaleRows(a)}${drapeCompare(a)}</div>
+      <div class="an-card"><div class="row between"><span class="k">Типаж внешности</span>${confPill(a.confidence?.type)}</div><b>${esc(a.kibbe ? `${KIBBE_KB[a.kibbe].ru} · ${KIBBE_KB[a.kibbe].name}` : ty.name || "—")}</b>${a.kibbe_alt ? `<span class="muted small">Второй вариант: ${esc(KIBBE_KB[a.kibbe_alt].ru)}</span>` : ""}
         ${a.type_tags?.length ? `<div class="chips">${a.type_tags.map((t) => `<span class="chip tag">${esc(t)}</span>`).join("")}</div>` : ""}
         ${ty.features ? `<p class="small">${esc(ty.features)}</p>` : ""}
         ${featureChips(a)}</div>
@@ -535,6 +578,9 @@ function viewAnalysis(a) {
       ${a.hair ? `<div class="an-card"><span class="k">Волосы</span><p>${esc(a.hair)}</p></div>` : ""}
       ${a.makeup ? `<div class="an-card"><span class="k">Уход и макияж</span><p>${esc(a.makeup)}</p></div>` : ""}
     </div>` : ""}
+    ${a.evidence?.length ? `<details class="an-card evid"><summary><span class="k">На чём основан разбор</span></summary><ul>${a.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul></details>` : ""}
+    ${kbBlock(a)}
+    ${drapeBlock(a)}
     ${pinsBlock(a)}
     ${a.unsure ? `<p class="muted small">Что по фото определить не получилось: ${esc(a.unsure)}</p>` : ""}</div>`;
 }
@@ -896,6 +942,64 @@ async function setLookFile(file) {
   } catch { toast("Не получилось открыть эту картинку"); }
 }
 
+/* ---------- точность: уверенность, справочник, драпировка ---------- */
+function confPill(c) {
+  if (!c) return "";
+  const t = { high: ["высокая уверенность", ""], medium: ["средняя уверенность", " warn"], low: ["низкая уверенность", " bad"] }[c];
+  return t ? `<span class="pill${t[1]}">${t[0]}</span>` : "";
+}
+function kbBlock(a) {
+  const s = SEASON_KB[a.season], k = KIBBE_KB[a.kibbe], arch = (a.archetypes || []).map((x) => [x, ARCHETYPES[x]]).filter((x) => x[1]);
+  if (!s && !k && !arch.length) return "";
+  const nb = s ? s.neighbors.map((n) => SEASON_KB[n]?.name).filter(Boolean).join(" и ") : "";
+  return `<div class="stack" style="gap:10px"><span class="k" style="font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)">Справочник по твоему типажу</span>
+  <div class="an-grid two">
+    ${s ? `<div class="an-card kb"><span class="k">${esc(s.name)}</span><p class="small">${esc(s.look)}</p>
+      <dl><dt>Ведущая черта</dt><dd>${esc(s.lead)}, затем ${esc(s.second)}</dd><dt>Лучшие цвета</dt><dd>${esc(s.best)}</dd><dt>Осторожно</dt><dd>${esc(s.avoid)}</dd><dt>Металл</dt><dd>${esc(s.metal)}</dd>${nb ? `<dt>Соседние типы</dt><dd>${esc(nb)}: если сомневаешься, сравни с ними</dd>` : ""}</dl>
+      ${swatches(s.keys)}</div>` : ""}
+    ${k ? `<div class="an-card kb"><span class="k">${esc(k.ru)} · ${esc(k.name)} · ${esc(k.yy)}</span><p class="small">${esc(k.look)}</p>
+      <dl><dt>Силуэт</dt><dd>${esc(k.silhouette)}</dd><dt>Ткани</dt><dd>${esc(k.fabrics)}</dd><dt>Детали</dt><dd>${esc(k.details)}</dd><dt>Избегать</dt><dd>${esc(k.avoid)}</dd></dl></div>` : ""}
+  </div>
+  ${arch.length ? `<div class="an-grid two">${arch.map(([key, x]) => `<div class="an-card kb"><span class="k">Архетип · ${esc(x.name)}</span><b>${esc(x.idea)}</b><p class="small">${esc(x.style)}</p><div class="chips">${x.aesthetics.split(", ").map((t) => `<a class="chip" href="https://www.pinterest.com/search/pins/?q=${encodeURIComponent(t + " outfit")}" target="_blank" rel="noopener">${esc(t)}</a>`).join("")}</div></div>`).join("")}</div>` : ""}
+  </div>`;
+}
+const DRAPE_T = { cool: "холодный", warm: "тёплый", soft: "мягкая", clear: "чистая", light: "светлая", deep: "глубокая" };
+function drapeCompare(a) {
+  const d = S.profile?.drape; if (!d) return "";
+  const sc = a.scales || {};
+  const rows = [["undertone", "Подтон"], ["chroma", "Насыщенность"], ["depth", "Глубина"]].filter(([k]) => d[k]).map(([k, l]) => {
+    const claude = k === "chroma" ? (sc.chroma === "medium" ? "" : sc.chroma) : sc[k] === "neutral" || sc[k] === "medium" ? "" : sc[k];
+    const same = claude && claude === d[k];
+    return `<li>${l}: драпировка — <b>${DRAPE_T[d[k]]}</b>${claude ? (same ? " ✓ совпадает" : ` · разбор — ${DRAPE_T[claude] || claude} <span class="pill warn">расходится</span>`) : ""}</li>`;
+  });
+  return rows.length ? `<div class="drape-sum"><span class="small muted">Цифровая драпировка</span><ul>${rows.join("")}</ul></div>` : "";
+}
+function drapeBand(key) {
+  const a = analysis(); const idx = (S.profile?.photos || []).indexOf(key) + 1;
+  const ys = (a?.markers || []).filter((m) => m.photo === idx && ["lips", "skin", "face"].includes(m.kind)).map((m) => m.y);
+  const top = ys.length ? Math.max(...ys) + 0.13 : 0.7;
+  return Math.min(0.86, Math.max(0.55, top));
+}
+function drapeBlock() {
+  const photos = (S.profile?.photos || []).filter((k) => S.urls[k]);
+  if (!photos.length) return "";
+  const dr = S.drape;
+  if (!dr) return `<div class="an-card drape"><span class="k">Проверка драпировкой</span><p class="small">Как у колориста, только на твоём фото: ${DRAPE_ROUNDS.length} пар цветов у лица, выбирай, с каким лицо выглядит свежее, кожа ровнее, а глаза ярче. Лучше смотреть на экране с нормальной яркостью, без ночного режима.</p>
+    <div class="row">${photos.map((k, i) => `<button class="btn ${i ? "ghost" : "cherry"}" data-act="drape-start" data-k="${k}">${photos.length > 1 ? `С фото ${i + 1}` : "Начать драпировку"}</button>`).join("")}</div></div>`;
+  if (dr.done) {
+    const d = S.profile?.drape || {};
+    return `<div class="an-card drape"><span class="k">Драпировка готова</span><ul class="small">${["undertone", "chroma", "depth"].map((k) => `<li>${{ undertone: "Подтон", chroma: "Насыщенность", depth: "Глубина" }[k]}: ${d[k] ? `<b>${DRAPE_T[d[k]]}</b>` : "разницы не видно"}</li>`).join("")}</ul>
+      <p class="small">Сравнение с разбором — в карточке цветотипа выше. Если есть расхождения, уточни разбор: сайт добавит результат драпировки в запрос.</p>
+      <div class="row"><button class="btn cherry" data-act="drape-reanalyze">✦ Уточнить разбор с драпировкой</button><button class="btn ghost" data-act="drape-close">Готово</button></div></div>`;
+  }
+  const r = DRAPE_ROUNDS[dr.i], url = S.urls[dr.key], band = drapeBand(dr.key);
+  const side = (c, v) => `<button class="drape-opt" data-act="drape-pick" data-v="${v}" aria-label="${esc(c.t)}"><span class="drape-img"><img src="${url}" alt=""><i style="top:${(band * 100).toFixed(0)}%;background:${c.hex}"></i></span><span class="small">${esc(c.t)}</span></button>`;
+  return `<div class="an-card drape"><div class="row between"><span class="k">Драпировка · ${dr.i + 1} из ${DRAPE_ROUNDS.length}</span><button class="linkbtn" data-act="drape-close">прервать</button></div>
+    <p class="small">С каким цветом лицо выглядит свежее? Смотри на кожу и глаза, а не на то, какой цвет нравится.</p>
+    <div class="drape-pair">${side(r.a, r.a.v)}${side(r.b, r.b.v)}</div>
+    <div class="row"><button class="btn ghost" data-act="drape-pick" data-v="same">Не вижу разницы</button></div></div>`;
+}
+
 /* ---------- события ---------- */
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("button");
@@ -1020,7 +1124,26 @@ document.addEventListener("click", async (e) => {
       try { await store.del("outfits", d.id); } catch { toast("Не получилось удалить"); return; }
       S.outDel = null; await reloadOutfits(); render(); toast("Образ удалён"); return;
     }
-    case "an-go": openBridge("analyze", analyzePrompt(S.selfies.length), { n: S.selfies.length }); return;
+    case "an-go": openBridge("analyze", analyzePrompt(S.selfies.length, analyzeCtx()), { n: S.selfies.length }); return;
+    case "an-mode": S.anMode = d.m; refreshAnalyzeBridge(); render(); return;
+    case "drape-start": { const k = d.k; S.drape = { key: k, i: 0, answers: {} }; render(); document.querySelector(".drape")?.scrollIntoView({ block: "start" }); return; }
+    case "drape-pick": {
+      if (!S.drape) return;
+      S.drape.answers[S.drape.i] = d.v; S.drape.i++;
+      if (S.drape.i >= DRAPE_ROUNDS.length) {
+        const sum = drapeSummary(S.drape.answers);
+        await setProfile({ ...S.profile, drape: { ...sum, at: Date.now() } });
+        S.drape.done = true;
+      }
+      render(); return;
+    }
+    case "drape-close": S.drape = null; render(); return;
+    case "drape-reanalyze": {
+      S.drape = null;
+      const n = (S.profile?.photos || []).length;
+      openBridge("analyze", analyzePrompt(n, { quiz: S.quiz, drape: S.profile?.drape }), { n });
+      render(); document.querySelector(".bridge")?.scrollIntoView({ block: "center" }); return;
+    }
     case "selfie-rm": { const x = S.selfies.splice(+d.i, 1)[0]; if (x) URL.revokeObjectURL(x.url); refreshAnalyzeBridge(); render(); return; }
     case "look": S.viewPhoto = +d.i; render(); return;
     case "skip-onb": S.skipOnb = true; try { sessionStorage.setItem("wd-skip", "1"); } catch {} render(); return;
@@ -1047,6 +1170,7 @@ document.addEventListener("change", (e) => {
     e.target.files[0].text().then((t) => { try { S.importConfirm = JSON.parse(t); } catch { toast("Файл не похож на копию гардероба"); } render(); });
   }
   if (id === "f-color" || id === "f-cat") { readForm(); render(); }
+  if (e.target.dataset?.quiz) { S.quiz = { ...S.quiz, [e.target.dataset.quiz]: e.target.value }; saveKv("quiz", S.quiz); refreshAnalyzeBridge(); if (S.br?.kind === "analyze") render(); }
   if (e.target.dataset?.cap) {
     const capId = e.target.dataset.cap, item = e.target.dataset.item, on = e.target.checked;
     const upd = (c) => ({ ...c, checked: on ? [...new Set([...(c.checked || []), item])] : (c.checked || []).filter((x) => x !== item) });
