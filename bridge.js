@@ -247,28 +247,67 @@ export const SHOPS = {
   ym: { title: "Яндекс Маркет", host: /(^|\.)market\.yandex\.ru$/, card: /\/(product--|card\/)[^/]+/, search: (q) => `https://market.yandex.ru/search?text=${encodeURIComponent(q)}`, photo: "https://market.yandex.ru/" },
 };
 
+const MATCHES = ["exact", "very_close", "similar"];
+const LINK_RULES = `Правила поиска товаров:
+- Обязательно используй веб-поиск. Ищи прямо на маркетплейсах, например запросами вида «site:wildberries.ru рубашка оверсайз принт картина бордовые рукава», «site:ozon.ru …», «site:market.yandex.ru …», и по картинке, если умеешь.
+- Для каждой вещи найди 2–4 товара, максимально похожих именно на эту вещь: тот же тип, цвет, фасон, материал и узнаваемые детали. Лучше меньше, но точнее.
+- Давай только прямые ссылки на карточки товаров: wildberries.ru/catalog/<номер>/detail.aspx, ozon.ru/product/…, market.yandex.ru/product--… или market.yandex.ru/card/…. Ссылки на поиск, каталог, категории и подборки не подходят.
+- Бери ссылки только из результатов поиска, которые ты действительно видел. Не придумывай номера товаров и не собирай ссылки по шаблону.
+- Для каждой ссылки укажи название товара как в карточке, цену, если видна, насколько похоже (exact — та же вещь, very_close — очень похожа, similar — похожа по духу) и одним предложением, чем отличается.
+- Если для вещи ничего подходящего не нашлось, оставь links пустым, это лучше, чем неточная ссылка.`;
+
 export function lookPrompt() {
-  return `Я прикрепляю картинку: коллаж образа (одежда, обувь, аксессуары). Ты стилист-байер. Разбери образ на отдельные вещи и помоги найти такие же или похожие на Wildberries, Ozon и Яндекс Маркете. Отвечай по-русски.
+  return `Я прикрепляю картинку: коллаж образа (одежда, обувь, аксессуары). Ты стилист-байер с доступом к веб-поиску. Разбери образ на отдельные вещи и найди для каждой конкретные товары на Wildberries, Ozon и Яндекс Маркете, которые максимально на неё похожи. Отвечай по-русски.
 
 Для каждой вещи на картинке (и одежды, и аксессуаров) укажи:
 - что это и чем она узнаваема: фасон, крой, длина, посадка, материал и фактура, принт, фурнитура, отделка;
-- точный поисковый запрос (query) — так, как продавцы называют такие товары в карточках на Wildberries и Ozon: тип вещи + цвет + материал или фактура + фасон + 1–2 самые узнаваемые детали. 5–9 слов, без брендов и оценочных слов («красивый», «модный»). Пример хорошего запроса: «рубашка оверсайз с принтом картина бордовые рукава», «топ сетка без рукавов воротник стойка вышивка цветы», «ботинки на высокой платформе кожа черные со сборкой»;
-- запасной запрос (query_alt) — шире, 3–5 слов, если по точному ничего не найдётся;
-- рамку вещи на картинке bbox: [x1, y1, x2, y2] от 0 до 1 от левого верхнего угла, чтобы вещь целиком помещалась в рамку, и центр x, y.
-Если у тебя есть доступ к поиску в интернете, найди для каждой вещи 1–3 товара, максимально похожих именно на эту вещь по фасону, цвету и деталям, на wildberries.ru, ozon.ru или market.yandex.ru. Давай только прямые ссылки на карточки товаров (wildberries.ru/catalog/<номер>/detail.aspx, ozon.ru/product/..., market.yandex.ru/product--... или /card/...), не ссылки на поиск или каталог. Если поиска нет или похожий товар не нашёлся, оставь links пустым массивом. Не придумывай ссылки и номера товаров.
+- рамку вещи на картинке bbox: [x1, y1, x2, y2] от 0 до 1 от левого верхнего угла, чтобы вещь целиком помещалась в рамку, и центр x, y;
+- найденные товары (links) — это главное;
+- запасной поисковый запрос query, так, как продавцы называют такой товар в карточках (вещь + цвет + материал + фасон + 1–2 детали, 5–9 слов), на случай если товар не нашёлся.
+
+${LINK_RULES}
 
 Категории: ${CATS.map((c) => `${c.id} — ${c.t}`).join(", ")}.
 Цвета: ${colorList}.
 Стили: ${STYLES.map((s) => `${s[0]} — ${s[1]}`).join(", ")}.
 
-Ответь ТОЛЬКО одним JSON-объектом, без текста до и после:
+Сначала выполни поиск, затем ответь ТОЛЬКО одним JSON-объектом, без текста до и после:
 {
   "title": "название образа, 2–4 слова",
   "style": "эстетика образа, например soft grunge или dark academia",
   "styles": ["1–3 ключа стилей"],
-  "items": [{"name": "что это, 2–4 слова", "cat": "ключ категории", "color": "ключ основного цвета", "details": "фасон и детали, одно предложение", "query": "точный запрос", "query_alt": "запасной запрос", "bbox": [0.3, 0.1, 0.7, 0.5], "x": 0.5, "y": 0.3, "links": [{"shop": "wb | ozon | ym", "url": "https://...", "title": "название товара", "price": "цена, если видна"}]}],
+  "items": [{"name": "что это, 2–4 слова", "cat": "ключ категории", "color": "ключ основного цвета", "details": "фасон и детали, одно предложение", "bbox": [0.3, 0.1, 0.7, 0.5], "x": 0.5, "y": 0.3, "query": "запасной запрос", "links": [{"shop": "wb | ozon | ym", "url": "https://...", "title": "название товара", "price": "2 490 ₽", "match": "exact | very_close | similar", "note": "чем отличается, одно предложение"}]}],
   "tip": "как повторить образ, одно-два предложения"
 }`;
+}
+
+// Дополнительный запрос: найти товары для вещей, по которым ссылок не нашлось.
+export function lookMorePrompt(res) {
+  const miss = res.items.map((it, n) => ({ it, n })).filter(({ it }) => !it.links.length);
+  return `Продолжаем разбор образа «${res.title}» (картинка выше в этом чате). Для этих вещей пока нет ссылок на товары:
+${miss.map(({ it, n }) => `${n + 1}. ${it.name}${it.details ? " — " + it.details : ""}`).join("\n")}
+
+Найди для каждой 2–4 максимально похожих товара на Wildberries, Ozon или Яндекс Маркете. Если в прошлый раз поиск был недоступен, используй его сейчас.
+
+${LINK_RULES}
+
+Ответь ТОЛЬКО одним JSON-объектом:
+{"items": [{"n": ${miss[0] ? miss[0].n + 1 : 1}, "links": [{"shop": "wb | ozon | ym", "url": "https://...", "title": "…", "price": "…", "match": "exact | very_close | similar", "note": "…"}]}]}`;
+}
+
+export function parseLookMore(text, res) {
+  const r = extractJson(text);
+  const byN = new Map(arr(r.items).map((x) => [Math.round(Number(x?.n)), arr(x?.links).map(cleanLink).filter(Boolean).slice(0, 4)]));
+  let added = 0;
+  const items = res.items.map((it, i) => {
+    const extra = byN.get(i + 1) || [];
+    const seen = new Set(it.links.map((l) => l.url));
+    const links = [...it.links, ...extra.filter((l) => !seen.has(l.url))].slice(0, 6);
+    added += links.length - it.links.length;
+    return { ...it, links };
+  });
+  if (!added) throw new Error("В ответе нет новых ссылок на карточки товаров. Проверь, что в claude.ai включён веб-поиск.");
+  return { ...res, items };
 }
 
 function cleanLink(l) {
@@ -277,7 +316,7 @@ function cleanLink(l) {
     if (u.protocol !== "https:") return null;
     const shop = Object.keys(SHOPS).find((k) => SHOPS[k].host.test(u.hostname));
     if (!shop || !SHOPS[shop].card.test(u.pathname)) return null;
-    return { shop, url: u.href, title: str(l?.title, 120), price: str(l?.price, 30) };
+    return { shop, url: u.href, title: str(l?.title, 120), price: str(l?.price, 30), match: MATCHES.includes(l?.match) ? l.match : "similar", note: str(l?.note, 160) };
   } catch { return null; }
 }
 
@@ -294,7 +333,7 @@ export function parseLook(text) {
       ? (([a, b, c, d]) => (c > a && d > b ? [a, b, c, d] : null))(it.bbox.map(clamp01)) : null,
     x: Number.isFinite(Number(it?.x)) ? clamp01(it.x) : null,
     y: Number.isFinite(Number(it?.y)) ? clamp01(it.y) : null,
-    links: arr(it?.links).map(cleanLink).filter(Boolean).slice(0, 4),
+    links: arr(it?.links).map(cleanLink).filter(Boolean).sort((p, q) => MATCHES.indexOf(p.match) - MATCHES.indexOf(q.match)).slice(0, 6),
   })).filter((it) => it.name).slice(0, 20);
   if (!items.length) throw new Error("В ответе нет вещей из образа. Проверь, что скопирован ответ на этот запрос.");
   return {

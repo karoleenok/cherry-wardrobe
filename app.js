@@ -4,7 +4,7 @@ import { PINS } from "./pins.js";
 import { weatherText, weatherNeeds, scoreOutfit, suggestOutfits, countCombos, dayKey, wearStats, wardrobeGaps, CAPSULE_PRESETS, buildCapsule, photoQuality, DRAPE_ROUNDS, drapeSummary } from "./logic.js";
 import { QUIZ } from "./bridge.js";
 import { SEASON_KB, KIBBE_KB, ARCHETYPES } from "./knowledge.js";
-import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits, SHOPS, lookPrompt, parseLook } from "./bridge.js";
+import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits, SHOPS, lookPrompt, parseLook, lookMorePrompt, parseLookMore } from "./bridge.js";
 
 /* ---------- справочники ---------- */
 const CATT = Object.fromEntries(CATS.map((c) => [c.id, c.t]));
@@ -68,7 +68,8 @@ const HINTS = {
   analyzeN: (n) => `прикрепи эти же ${n} фото в том же порядке, как пронумерованы выше`,
   tag: "прикрепи фото этой вещи",
   outfits: "фото прикреплять не нужно",
-  look: "прикрепи эту картинку-коллаж",
+  look: "<b>включи веб-поиск</b> (кнопка поиска или «Инструменты» в поле ввода), прикрепи эту картинку-коллаж",
+  lookmore: "вернись в <b>тот же чат</b>, где разбирала коллаж, проверь, что веб-поиск включён,",
 };
 function openBridge(kind, prompt, extra = {}) {
   S.br = { kind, prompt, answer: "", err: null, ...extra };
@@ -113,6 +114,11 @@ async function applyAnswer() {
       readForm();
       Object.assign(S.draft, parseTag(b.answer));
       S.br = null; toast("Поля заполнены по фото, проверь их"); render();
+    } else if (b.kind === "lookmore") {
+      const upd = parseLookMore(b.answer, S.lookRes);
+      S.lookRes = upd;
+      if (upd.photoKey) { S.looks = S.looks.map((l) => (l.id === upd.id ? upd : l)); await saveKv("looks", S.looks); }
+      S.br = null; toast("Товары добавлены"); render();
     } else if (b.kind === "look") {
       S.lookRes = { ...parseLook(b.answer), photoKey: null };
       S.br = null; render(); window.scrollTo(0, 0);
@@ -909,6 +915,8 @@ function viewShop() {
       </div>
       <div class="stack" style="gap:12px">
         <div class="stack" style="gap:4px"><h3>${esc(r.title)}</h3>${r.style ? `<span class="muted small">${esc(r.style)}</span>` : ""}${r.tip ? `<p class="small" style="margin:0">${esc(r.tip)}</p>` : ""}</div>
+        ${(() => { const withL = r.items.filter((it) => it.links.length).length, total = r.items.reduce((t, it) => t + it.links.length, 0), miss = r.items.length - withL;
+          return `<div class="found ${miss ? "part" : "all"}"><span><b>${total}</b> ${plural(total, "товар", "товара", "товаров")} для ${withL} из ${r.items.length} ${plural(r.items.length, "вещи", "вещей", "вещей")}</span>${miss ? (S.br?.kind === "lookmore" ? "" : `<button class="btn cherry" style="padding:6px 12px;font-size:13px" data-act="look-more">✦ Найти товары ещё для ${miss}</button>`) : ""}</div>${S.br?.kind === "lookmore" ? bridgeBox("lookmore") : ""}${!total ? '<div class="notice warn small">Claude не прислал ссылок на товары. Скорее всего, в чате был выключен веб-поиск: включи его и нажми «Найти товары ещё».</div>' : ""}`; })()}
         ${r.items.map((it, n) => shopItem(it, n)).join("")}
       </div>
     </div>`;
@@ -956,6 +964,15 @@ async function copyCrop(n) {
   try { await navigator.clipboard.write([new ClipboardItem({ "image/png": c.png })]); toast("Фото вещи скопировано. Вставь его в поиск по фото"); }
   catch { toast("Браузер не дал скопировать картинку. Нажми «Скачать» и загрузи файл в поиск по фото"); }
 }
+const MATCH_T = { exact: ["та же вещь", ""], very_close: ["очень похожа", ""], similar: ["похожа по духу", " warn"] };
+function productCard(l) {
+  const sh = SHOPS[l.shop], mt = MATCH_T[l.match] || MATCH_T.similar;
+  return `<a class="prod" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">
+    <span class="prod-shop ${l.shop}">${esc(sh.title)}</span>
+    <span class="prod-body"><b>${esc(l.title || "Товар")}</b>${l.note ? `<span class="muted small">${esc(l.note)}</span>` : ""}</span>
+    <span class="prod-side">${l.price ? `<b class="prod-price">${esc(l.price)}</b>` : ""}<span class="pill${mt[1]}">${mt[0]}</span><span class="prod-go">Открыть ↗</span></span>
+  </a>`;
+}
 function shopItem(it, n) {
   const c = COL[it.color];
   const pal = analysis()?.palette || [];
@@ -963,19 +980,17 @@ function shopItem(it, n) {
   const m = lookMatches(it);
   const inWish = S.wishlist.some((w) => w.fromLook === it.query && !w.done);
   const cr = crops[cropKey(n)];
-  const shopRow = (q, cls = "") => Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k} ${cls}" href="${sh.search(q)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("");
   return `<div class="shop-item">
     <div class="si-head">${cr ? `<img class="si-crop" src="${cr.url}" alt="${esc(it.name)}">` : ""}
       <div class="stack" style="gap:4px;min-width:0"><div class="row" style="gap:8px;align-items:center"><span class="lg-n">${n + 1}</span><b>${esc(it.name)}</b>${fit}</div>
         <span class="muted small">${esc(CATT[it.cat] || "")}${c ? ` · <i class="dot" style="background:${c.hex}"></i> ${esc(c.t)}` : ""}</span>
         ${it.details ? `<p class="small" style="margin:0">${esc(it.details)}</p>` : ""}</div></div>
-    ${it.links.length ? `<div class="stack" style="gap:4px"><span class="si-k">Похожие товары, которые нашёл Claude</span><ul class="plinks">${it.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(SHOPS[l.shop].title)}: ${esc(l.title || "товар")}${l.price ? ` · ${esc(l.price)}` : ""} ↗</a></li>`).join("")}</ul></div>` : ""}
-    ${cr ? `<div class="stack" style="gap:6px"><span class="si-k">Поиск по фото — точнее всего</span>
-      <div class="row" style="gap:6px"><button class="btn cherry" style="padding:6px 12px;font-size:13px" data-act="crop-copy" data-n="${n}">Скопировать фото вещи</button><a class="btn ghost" style="padding:6px 12px;font-size:13px" href="${cr.url}" download="вещь-${n + 1}.png">Скачать</a></div>
-      <span class="muted small">Вставь фото в поиск по картинке: <a href="${SHOPS.wb.photo}" target="_blank" rel="noopener">Wildberries</a> и <a href="${SHOPS.ozon.photo}" target="_blank" rel="noopener">Ozon</a> — значок камеры в строке поиска, <a href="https://ya.ru/images/" target="_blank" rel="noopener">Яндекс Картинки</a> — покажет товары с маркетплейсов.</span></div>` : ""}
-    <div class="stack" style="gap:6px"><span class="si-k">Поиск по описанию</span><div class="row" style="gap:6px">${shopRow(it.query)}</div>
-      <span class="muted small">«${esc(it.query)}»</span>
-      ${it.query_alt ? `<span class="muted small">Шире: «${esc(it.query_alt)}» — ${Object.entries(SHOPS).map(([k, sh]) => `<a href="${sh.search(it.query_alt)}" target="_blank" rel="noopener noreferrer">${sh.title}</a>`).join(" · ")}</span>` : ""}</div>
+    ${it.links.length ? `<div class="prods">${it.links.map(productCard).join("")}</div>` : '<div class="notice small">Для этой вещи товаров пока нет. Нажми «Найти товары ещё» выше или найди по фото.</div>'}
+    <details class="si-more"><summary>Искать самой: по фото или по запросу</summary>
+      ${cr ? `<div class="stack" style="gap:6px"><div class="row" style="gap:6px"><button class="btn ghost" style="padding:6px 12px;font-size:13px" data-act="crop-copy" data-n="${n}">Скопировать фото вещи</button><a class="btn ghost" style="padding:6px 12px;font-size:13px" href="${cr.url}" download="вещь-${n + 1}.png">Скачать</a></div>
+        <span class="muted small">Вставь фото в поиск по картинке: <a href="${SHOPS.wb.photo}" target="_blank" rel="noopener">Wildberries</a> и <a href="${SHOPS.ozon.photo}" target="_blank" rel="noopener">Ozon</a> — значок камеры в строке поиска, <a href="https://ya.ru/images/" target="_blank" rel="noopener">Яндекс Картинки</a>.</span></div>` : ""}
+      ${it.query ? `<span class="muted small">По запросу «${esc(it.query)}»: ${Object.entries(SHOPS).map(([k, sh]) => `<a href="${sh.search(it.query)}" target="_blank" rel="noopener noreferrer">${sh.title}</a>`).join(" · ")}</span>` : ""}
+    </details>
     <div class="row between" style="gap:8px">${m.list.length ? `<span class="stack" style="gap:4px"><span class="small muted">${m.exact ? "У тебя уже есть похожее" : "Можно заменить своим"}</span>${miniRow(m.list.map((x) => x.id))}</span>` : '<span class="small muted">Похожего в гардеробе нет</span>'}
       <button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="look-wish" data-n="${n}"${inWish ? " disabled" : ""}>${inWish ? "В вишлисте" : "В вишлист"}</button></div>
   </div>`;
@@ -988,8 +1003,8 @@ function viewWishlist() {
       ${w.crop ? `<img class="wc-img" src="${w.crop}" alt="">` : `<i class="wc-img sw" style="background:${(COL[w.color] || {}).hex || "var(--sunk)"}"></i>`}
       <div class="stack" style="gap:4px;min-width:0"><b>${esc(w.title)}</b>
         <span class="muted small">${[CATT[w.cat], (COL[w.color] || {}).t, w.source].filter(Boolean).map(esc).join(" · ")}</span>
-        ${w.query && !w.done ? `<div class="row" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(w.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>` : ""}
-        ${w.links?.length && !w.done ? `<ul class="plinks">${w.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(SHOPS[l.shop]?.title || "")}: ${esc(l.title || "товар")}${l.price ? ` · ${esc(l.price)}` : ""} ↗</a></li>`).join("")}</ul>` : ""}
+        ${w.links?.length && !w.done ? `<div class="prods">${w.links.filter((l) => SHOPS[l.shop]).map(productCard).join("")}</div>` : ""}
+        ${w.query && !w.done && !w.links?.length ? `<div class="row" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(w.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>` : ""}
         <div class="row" style="gap:8px">${w.done ? '<span class="pill">куплено</span>' : `<button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="wish-bought" data-id="${w.id}">Купила</button>`}<button class="linkbtn" data-act="wish-del" data-id="${w.id}">убрать</button></div>
       </div></div>`;
   return `<div class="stack" style="gap:2px"><h2>Вишлист</h2><span class="muted small">Вещи, которые хочешь купить: из разобранных образов, из подсказок «Чего не хватает» и свои</span></div>
@@ -1155,6 +1170,7 @@ document.addEventListener("click", async (e) => {
       await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
     }
     case "crop-copy": copyCrop(+d.n); return;
+    case "look-more": if (S.lookRes) { openBridge("lookmore", lookMorePrompt(S.lookRes)); document.querySelector(".bridge")?.scrollIntoView({ block: "center" }); } return;
     case "look-build": {
       const r = S.lookRes; if (!r) return;
       const ids = [];

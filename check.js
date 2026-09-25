@@ -174,4 +174,16 @@ assert.match(promptAcc, /КРИТЕРИИ ЦВЕТОТИПА/);
 assert.match(promptAcc, /зеленоватые/);
 assert.match(promptAcc, /подтон — холодный/);
 
+// ссылки на товары: оценка похожести и дозапрос
+const lk = B.parseLook(JSON.stringify({ items: [
+  { name: "Брюки", links: [{ url: "https://www.ozon.ru/product/bryuki-123/", title: "b", match: "similar" }, { url: "https://www.wildberries.ru/catalog/5/detail.aspx", title: "a", match: "exact", note: "та же" }] },
+  { name: "Сумка", links: [] } ] }));
+assert.deepEqual(lk.items[0].links.map((l) => l.match), ["exact", "similar"], "сначала самые похожие");
+assert.match(B.lookMorePrompt(lk), /2\. Сумка/);
+assert.doesNotMatch(B.lookMorePrompt(lk), /1\. Брюки/);
+const more = B.parseLookMore('{"items":[{"n":2,"links":[{"url":"https://market.yandex.ru/card/sumka/123","title":"Сумка","match":"very_close"},{"url":"https://www.ozon.ru/search/?text=x"}]}]}', lk);
+assert.equal(more.items[1].links.length, 1);
+assert.equal(more.items[1].links[0].shop, "ym");
+assert.throws(() => B.parseLookMore('{"items":[]}', lk), /веб-поиск/);
+
 console.log("OK: все проверки прошли");
