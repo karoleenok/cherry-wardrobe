@@ -137,6 +137,7 @@ assert.match(B.lookPrompt(), /Wildberries/);
 const look = B.parseLook('```json\n' + JSON.stringify({ title: "Готика", styles: ["grunge", "xx"], items: [
   { name: "Широкие брюки в полоску", cat: "bottom", color: "black", query: "широкие брюки в тонкую полоску", x: 0.5, y: 0.6, links: [
     { shop: "wb", url: "https://www.wildberries.ru/catalog/123/detail.aspx", title: "Брюки" },
+    { shop: "wb", url: "https://www.wildberries.ru/catalog/0/search.aspx?search=брюки", title: "поиск — не карточка" },
     { shop: "ozon", url: "http://www.ozon.ru/product/1", title: "http нельзя" },
     { shop: "x", url: "https://evil.example.com/ozon.ru", title: "чужой сайт" },
     { url: "https://market.yandex.ru/product--x/1", title: "ЯМ" } ] },
@@ -146,6 +147,8 @@ assert.equal(look.items.length, 2);
 assert.deepEqual(look.items[0].links.map((l) => l.shop), ["wb", "ym"]);
 assert.equal(look.items[1].cat, "acc");
 assert.equal(look.items[1].x, 1);
+const lb = B.parseLook('{"items":[{"name":"a","bbox":[0.1,0.2,0.5,0.9]},{"name":"b","bbox":[0.5,0.5,0.2,0.9]},{"name":"c","bbox":[0,1]}]}');
+assert.deepEqual(lb.items.map((i) => i.bbox), [[0.1, 0.2, 0.5, 0.9], null, null]);
 assert.deepEqual(look.styles, ["grunge"]);
 assert.match(B.SHOPS.wb.search("чёрные ботинки"), /wildberries\.ru\/catalog\/0\/search\.aspx\?search=/);
 assert.throws(() => B.parseLook('{"items":[]}'), /нет вещей/);

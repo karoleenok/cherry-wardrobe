@@ -252,7 +252,7 @@ function dropUrl(path) { if (path && S.urls[path]) { URL.revokeObjectURL(S.urls[
 
 /* ---------- вкладки ---------- */
 function renderTabs() {
-  const tabs = [["today", "Сегодня", null], ["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["look", "Найти образ", S.looks.length || null], ["capsules", "Капсулы", S.capsules.length || null], ["stats", "Статистика", null], ["profile", "Мой типаж", null]];
+  const tabs = [["today", "Сегодня", null], ["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["look", "Найти образ", S.looks.length || null], ["wish", "Вишлист", S.wishlist.filter((w) => !w.done).length || null], ["capsules", "Капсулы", S.capsules.length || null], ["stats", "Статистика", null], ["profile", "Мой типаж", null]];
   $("tabs").innerHTML = tabs.map((t) => `<button class="tab" role="tab" id="tab-${t[0]}" data-tab="${t[0]}" aria-selected="${S.tab === t[0]}">${t[1]}${t[2] != null ? `<span class="n">${t[2]}</span>` : ""}</button>`).join("");
 }
 function render() {
@@ -266,8 +266,10 @@ function render() {
   else if (S.tab === "today") m.innerHTML = viewToday();
   else if (S.tab === "capsules") m.innerHTML = viewCapsules();
   else if (S.tab === "look") m.innerHTML = viewShop();
+  else if (S.tab === "wish") m.innerHTML = viewWishlist();
   else if (S.tab === "stats") m.innerHTML = viewStats();
   else m.innerHTML = viewProfile();
+  if (S.tab === "look" && S.lookRes) buildCrops();
 }
 
 /* ---------- гардероб ---------- */
@@ -846,11 +848,8 @@ function viewGaps() {
       <button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="wish-add" data-key="${x.key}"${inList ? " disabled" : ""}>${inList ? "В вишлисте" : "В вишлист"}</button></div>`;
   }).join("") + "</div>";
   if (g.faceAvoid.length) h += `<div class="notice warn small">У лица сейчас ${g.faceAvoid.length} ${plural(g.faceAvoid.length, "вещь", "вещи", "вещей")} не из твоей палитры: ${g.faceAvoid.map((id) => esc(byId(id)?.name)).join(", ")}. Их можно сочетать с шарфом или воротником подходящего цвета.</div>`;
-  const open = S.wishlist.filter((w) => !w.done);
-  h += `<div class="panel stack"><h3>Вишлист</h3>
-    ${open.length ? `<ul class="wish">${open.map((w) => `<li><i class="gsw sm" style="background:${(COL[w.color] || {}).hex || "#ccc"}"></i><span class="stack" style="gap:0"><b>${esc(w.title)}</b>${w.cat ? `<span class="muted small">${esc(CATT[w.cat] || "")}${w.color ? " · " + esc((COL[w.color] || {}).t || "") : ""}</span>` : ""}</span><button class="btn ghost" style="padding:4px 10px;font-size:12.5px" data-act="wish-bought" data-id="${w.id}">Купила</button><button class="linkbtn" data-act="wish-del" data-id="${w.id}">убрать</button></li>`).join("")}</ul>` : '<span class="muted small">Добавляй сюда вещи, которые хочешь купить.</span>'}
-    <form class="row" id="wish-form" style="gap:8px"><label class="f" style="flex:1;min-width:180px"><span class="sr">Что купить</span><input type="text" id="wish-in" placeholder="Например: серебряные серьги-кольца" maxlength="80"></label><button class="btn ghost" type="submit">Добавить</button></form>
-  </div></div>`;
+  const open = S.wishlist.filter((w) => !w.done).length;
+  h += `<div class="row"><button class="btn ghost" data-tab="wish">Открыть вишлист${open ? ` · ${open}` : ""}</button></div></div>`;
   return h;
 }
 
@@ -917,22 +916,88 @@ function viewShop() {
   if (S.looks.length) h += `<div class="stack" style="margin-top:24px"><h3>Сохранённые разборы</h3><div class="looks-grid">${S.looks.map((l) => `<button class="look-card" data-act="look-open" data-id="${l.id}">${S.urls[l.photoKey] ? `<img src="${S.urls[l.photoKey]}" alt="">` : ""}<span><b>${esc(l.title)}</b><span class="muted small">${l.items.length} ${plural(l.items.length, "вещь", "вещи", "вещей")}</span></span></button>`).join("")}</div></div>`;
   return h;
 }
+// Вырезки вещей из коллажа: по рамке bbox от Claude (или вокруг центра), кэшируются в памяти.
+const crops = {};
+const cropKey = (n) => `${S.lookRes?.id || "tmp"}:${n}`;
+async function lookBlob() {
+  const r = S.lookRes;
+  if (r?.photoKey) return store.get("photos", r.photoKey);
+  return S.lookImg?.blob || null;
+}
+async function buildCrops() {
+  const r = S.lookRes; if (!r) return;
+  const todo = r.items.map((it, n) => [it, n]).filter(([, n]) => !(cropKey(n) in crops));
+  if (!todo.length) return;
+  todo.forEach(([, n]) => (crops[cropKey(n)] = null)); // помечаем сразу, чтобы не запускать повторно
+  const blob = await lookBlob(); if (!blob) return;
+  const bmp = await createImageBitmap(blob);
+  for (const [it, n] of todo) {
+    let box = it.bbox;
+    if (!box && it.x !== null && it.y !== null) box = [it.x - 0.14, it.y - 0.14, it.x + 0.14, it.y + 0.14];
+    if (!box) continue;
+    const pad = 0.02;
+    const [x1, y1, x2, y2] = [Math.max(0, box[0] - pad), Math.max(0, box[1] - pad), Math.min(1, box[2] + pad), Math.min(1, box[3] + pad)];
+    const sw = (x2 - x1) * bmp.width, sh = (y2 - y1) * bmp.height;
+    if (sw < 8 || sh < 8) continue;
+    const k = Math.min(1, 700 / Math.max(sw, sh));
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(sw * k); cv.height = Math.round(sh * k);
+    const g = cv.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, cv.width, cv.height);
+    g.drawImage(bmp, x1 * bmp.width, y1 * bmp.height, sw, sh, 0, 0, cv.width, cv.height);
+    const png = await new Promise((res) => cv.toBlob(res, "image/png"));
+    if (!png) continue;
+    crops[cropKey(n)] = { url: URL.createObjectURL(png), png, small: cv.toDataURL("image/jpeg", 0.8) };
+  }
+  if (S.tab === "look") render();
+}
+async function copyCrop(n) {
+  const c = crops[cropKey(n)]; if (!c) return;
+  try { await navigator.clipboard.write([new ClipboardItem({ "image/png": c.png })]); toast("Фото вещи скопировано. Вставь его в поиск по фото"); }
+  catch { toast("Браузер не дал скопировать картинку. Нажми «Скачать» и загрузи файл в поиск по фото"); }
+}
 function shopItem(it, n) {
   const c = COL[it.color];
   const pal = analysis()?.palette || [];
   const fit = !c ? "" : c.kind === "avoid" ? (["top", "outer", "dress"].includes(it.cat) ? '<span class="pill bad">не у лица</span>' : '<span class="pill warn">не твой цвет</span>') : pal.includes(it.color) ? '<span class="pill">в твоей палитре</span>' : "";
   const m = lookMatches(it);
   const inWish = S.wishlist.some((w) => w.fromLook === it.query && !w.done);
+  const cr = crops[cropKey(n)];
+  const shopRow = (q, cls = "") => Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k} ${cls}" href="${sh.search(q)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("");
   return `<div class="shop-item">
-    <div class="row between" style="align-items:flex-start;flex-wrap:nowrap;gap:10px"><div class="row" style="gap:10px;flex-wrap:nowrap;align-items:flex-start"><span class="lg-n">${n + 1}</span><span class="stack" style="gap:2px"><b>${esc(it.name)}</b><span class="muted small">${esc(CATT[it.cat] || "")}${c ? ` · <i class="dot" style="background:${c.hex}"></i> ${esc(c.t)}` : ""}</span></span></div>${fit}</div>
-    ${it.details ? `<p class="small" style="margin:0">${esc(it.details)}</p>` : ""}
-    ${it.links.length ? `<ul class="plinks">${it.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(SHOPS[l.shop].title)}: ${esc(l.title || "товар")}${l.price ? ` · ${esc(l.price)}` : ""} ↗</a></li>`).join("")}</ul>` : ""}
-    <div class="row" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(it.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>
-    <span class="muted small">Запрос: «${esc(it.query)}»</span>
+    <div class="si-head">${cr ? `<img class="si-crop" src="${cr.url}" alt="${esc(it.name)}">` : ""}
+      <div class="stack" style="gap:4px;min-width:0"><div class="row" style="gap:8px;align-items:center"><span class="lg-n">${n + 1}</span><b>${esc(it.name)}</b>${fit}</div>
+        <span class="muted small">${esc(CATT[it.cat] || "")}${c ? ` · <i class="dot" style="background:${c.hex}"></i> ${esc(c.t)}` : ""}</span>
+        ${it.details ? `<p class="small" style="margin:0">${esc(it.details)}</p>` : ""}</div></div>
+    ${it.links.length ? `<div class="stack" style="gap:4px"><span class="si-k">Похожие товары, которые нашёл Claude</span><ul class="plinks">${it.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(SHOPS[l.shop].title)}: ${esc(l.title || "товар")}${l.price ? ` · ${esc(l.price)}` : ""} ↗</a></li>`).join("")}</ul></div>` : ""}
+    ${cr ? `<div class="stack" style="gap:6px"><span class="si-k">Поиск по фото — точнее всего</span>
+      <div class="row" style="gap:6px"><button class="btn cherry" style="padding:6px 12px;font-size:13px" data-act="crop-copy" data-n="${n}">Скопировать фото вещи</button><a class="btn ghost" style="padding:6px 12px;font-size:13px" href="${cr.url}" download="вещь-${n + 1}.png">Скачать</a></div>
+      <span class="muted small">Вставь фото в поиск по картинке: <a href="${SHOPS.wb.photo}" target="_blank" rel="noopener">Wildberries</a> и <a href="${SHOPS.ozon.photo}" target="_blank" rel="noopener">Ozon</a> — значок камеры в строке поиска, <a href="https://ya.ru/images/" target="_blank" rel="noopener">Яндекс Картинки</a> — покажет товары с маркетплейсов.</span></div>` : ""}
+    <div class="stack" style="gap:6px"><span class="si-k">Поиск по описанию</span><div class="row" style="gap:6px">${shopRow(it.query)}</div>
+      <span class="muted small">«${esc(it.query)}»</span>
+      ${it.query_alt ? `<span class="muted small">Шире: «${esc(it.query_alt)}» — ${Object.entries(SHOPS).map(([k, sh]) => `<a href="${sh.search(it.query_alt)}" target="_blank" rel="noopener noreferrer">${sh.title}</a>`).join(" · ")}</span>` : ""}</div>
     <div class="row between" style="gap:8px">${m.list.length ? `<span class="stack" style="gap:4px"><span class="small muted">${m.exact ? "У тебя уже есть похожее" : "Можно заменить своим"}</span>${miniRow(m.list.map((x) => x.id))}</span>` : '<span class="small muted">Похожего в гардеробе нет</span>'}
       <button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="look-wish" data-n="${n}"${inWish ? " disabled" : ""}>${inWish ? "В вишлисте" : "В вишлист"}</button></div>
   </div>`;
 }
+
+/* ---------- вишлист ---------- */
+function viewWishlist() {
+  const open = S.wishlist.filter((w) => !w.done), done = S.wishlist.filter((w) => w.done);
+  const card = (w) => `<div class="wcard${w.done ? " done" : ""}">
+      ${w.crop ? `<img class="wc-img" src="${w.crop}" alt="">` : `<i class="wc-img sw" style="background:${(COL[w.color] || {}).hex || "var(--sunk)"}"></i>`}
+      <div class="stack" style="gap:4px;min-width:0"><b>${esc(w.title)}</b>
+        <span class="muted small">${[CATT[w.cat], (COL[w.color] || {}).t, w.source].filter(Boolean).map(esc).join(" · ")}</span>
+        ${w.query && !w.done ? `<div class="row" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(w.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>` : ""}
+        ${w.links?.length && !w.done ? `<ul class="plinks">${w.links.map((l) => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(SHOPS[l.shop]?.title || "")}: ${esc(l.title || "товар")}${l.price ? ` · ${esc(l.price)}` : ""} ↗</a></li>`).join("")}</ul>` : ""}
+        <div class="row" style="gap:8px">${w.done ? '<span class="pill">куплено</span>' : `<button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="wish-bought" data-id="${w.id}">Купила</button>`}<button class="linkbtn" data-act="wish-del" data-id="${w.id}">убрать</button></div>
+      </div></div>`;
+  return `<div class="stack" style="gap:2px"><h2>Вишлист</h2><span class="muted small">Вещи, которые хочешь купить: из разобранных образов, из подсказок «Чего не хватает» и свои</span></div>
+    <form class="row" id="wish-form" style="gap:8px;margin-top:14px"><label class="f" style="flex:1;min-width:200px"><span class="sr">Что купить</span><input type="text" id="wish-in" placeholder="Например: серебряные серьги-кольца" maxlength="80"></label><button class="btn cherry" type="submit">Добавить</button></form>
+    ${open.length ? `<div class="wgrid" style="margin-top:14px">${open.map(card).join("")}</div>` : '<div class="empty" style="margin-top:14px">Пока пусто. Добавляй вещи кнопкой «В вишлист» во вкладках «Найти образ» и «Статистика» или впиши свою выше.</div>'}
+    ${done.length ? `<details style="margin-top:18px"><summary class="small" style="cursor:pointer">Куплено · ${done.length}</summary><div class="wgrid" style="margin-top:10px">${done.map(card).join("")}</div></details>` : ""}`;
+}
+
 async function setLookFile(file) {
   if (!file || !/^image\//.test(file.type)) { toast("Нужна картинка: JPG, PNG или WebP"); return; }
   try {
@@ -1056,7 +1121,7 @@ document.addEventListener("click", async (e) => {
     case "wish-add": {
       const g = wardrobeGaps(S.items, kindOf, { palette: analysis()?.palette || [] }).ideas.find((x) => x.key === d.key);
       if (!g) return;
-      S.wishlist = [...S.wishlist, { id: newId(), key: g.key, title: g.title, cat: g.cat, color: g.color, done: false, created_at: Date.now() }];
+      S.wishlist = [...S.wishlist, { id: newId(), key: g.key, title: g.title, cat: g.cat, color: g.color, query: `${(COL[g.color] || {}).t || ""} ${CATT[g.cat].toLowerCase()}`.trim(), source: "подсказка «Чего не хватает»", done: false, created_at: Date.now() }];
       await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
     }
     case "wish-del": S.wishlist = S.wishlist.filter((w) => w.id !== d.id); await saveKv("wishlist", S.wishlist); render(); return;
@@ -1085,9 +1150,11 @@ document.addEventListener("click", async (e) => {
     }
     case "look-wish": {
       const it = S.lookRes?.items[+d.n]; if (!it) return;
-      S.wishlist = [...S.wishlist, { id: newId(), title: it.name, cat: it.cat, color: it.color, fromLook: it.query, done: false, created_at: Date.now() }];
+      const cr = crops[cropKey(+d.n)];
+      S.wishlist = [...S.wishlist, { id: newId(), title: it.name, cat: it.cat, color: it.color, fromLook: it.query, query: it.query, links: it.links, crop: cr?.small || null, source: "из образа «" + (S.lookRes.title || "") + "»", done: false, created_at: Date.now() }];
       await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
     }
+    case "crop-copy": copyCrop(+d.n); return;
     case "look-build": {
       const r = S.lookRes; if (!r) return;
       const ids = [];

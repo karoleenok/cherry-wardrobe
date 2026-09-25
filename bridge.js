@@ -241,19 +241,21 @@ export function parseOutfits(text, map) {
 
 /* ---------- разбор коллажа образа ---------- */
 export const SHOPS = {
-  wb: { title: "Wildberries", host: /(^|\.)wildberries\.ru$/, search: (q) => `https://www.wildberries.ru/catalog/0/search.aspx?search=${encodeURIComponent(q)}` },
-  ozon: { title: "Ozon", host: /(^|\.)ozon\.ru$/, search: (q) => `https://www.ozon.ru/search/?text=${encodeURIComponent(q)}` },
-  ym: { title: "Яндекс Маркет", host: /(^|\.)market\.yandex\.ru$/, search: (q) => `https://market.yandex.ru/search?text=${encodeURIComponent(q)}` },
+  // card — как выглядит ссылка на карточку товара (а не на поиск или каталог)
+  wb: { title: "Wildberries", host: /(^|\.)wildberries\.ru$/, card: /\/catalog\/\d+\/detail\.aspx/, search: (q) => `https://www.wildberries.ru/catalog/0/search.aspx?search=${encodeURIComponent(q)}`, photo: "https://www.wildberries.ru/" },
+  ozon: { title: "Ozon", host: /(^|\.)ozon\.ru$/, card: /\/product\/[^/]+/, search: (q) => `https://www.ozon.ru/search/?text=${encodeURIComponent(q)}&from_global=true`, photo: "https://www.ozon.ru/" },
+  ym: { title: "Яндекс Маркет", host: /(^|\.)market\.yandex\.ru$/, card: /\/(product--|card\/)[^/]+/, search: (q) => `https://market.yandex.ru/search?text=${encodeURIComponent(q)}`, photo: "https://market.yandex.ru/" },
 };
 
 export function lookPrompt() {
   return `Я прикрепляю картинку: коллаж образа (одежда, обувь, аксессуары). Ты стилист-байер. Разбери образ на отдельные вещи и помоги найти такие же или похожие на Wildberries, Ozon и Яндекс Маркете. Отвечай по-русски.
 
 Для каждой вещи на картинке (и одежды, и аксессуаров) укажи:
-- что это и чем она узнаваема (фасон, материал, фактура, детали);
-- поисковый запрос для маркетплейса по-русски, 3–7 слов, без брендов, как ищут покупатели;
-- где вещь на картинке: координаты её центра x и y от 0 до 1 от левого верхнего угла.
-Если у тебя есть доступ к поиску в интернете, найди для каждой вещи по 1–2 конкретных похожих товара на wildberries.ru, ozon.ru или market.yandex.ru и дай прямые ссылки на карточки товаров. Если поиска нет или товар не нашёлся, оставь links пустым массивом. Не придумывай ссылки.
+- что это и чем она узнаваема: фасон, крой, длина, посадка, материал и фактура, принт, фурнитура, отделка;
+- точный поисковый запрос (query) — так, как продавцы называют такие товары в карточках на Wildberries и Ozon: тип вещи + цвет + материал или фактура + фасон + 1–2 самые узнаваемые детали. 5–9 слов, без брендов и оценочных слов («красивый», «модный»). Пример хорошего запроса: «рубашка оверсайз с принтом картина бордовые рукава», «топ сетка без рукавов воротник стойка вышивка цветы», «ботинки на высокой платформе кожа черные со сборкой»;
+- запасной запрос (query_alt) — шире, 3–5 слов, если по точному ничего не найдётся;
+- рамку вещи на картинке bbox: [x1, y1, x2, y2] от 0 до 1 от левого верхнего угла, чтобы вещь целиком помещалась в рамку, и центр x, y.
+Если у тебя есть доступ к поиску в интернете, найди для каждой вещи 1–3 товара, максимально похожих именно на эту вещь по фасону, цвету и деталям, на wildberries.ru, ozon.ru или market.yandex.ru. Давай только прямые ссылки на карточки товаров (wildberries.ru/catalog/<номер>/detail.aspx, ozon.ru/product/..., market.yandex.ru/product--... или /card/...), не ссылки на поиск или каталог. Если поиска нет или похожий товар не нашёлся, оставь links пустым массивом. Не придумывай ссылки и номера товаров.
 
 Категории: ${CATS.map((c) => `${c.id} — ${c.t}`).join(", ")}.
 Цвета: ${colorList}.
@@ -264,7 +266,7 @@ export function lookPrompt() {
   "title": "название образа, 2–4 слова",
   "style": "эстетика образа, например soft grunge или dark academia",
   "styles": ["1–3 ключа стилей"],
-  "items": [{"name": "что это, 2–4 слова", "cat": "ключ категории", "color": "ключ основного цвета", "details": "фасон и детали, одно предложение", "query": "поисковый запрос", "x": 0.5, "y": 0.3, "links": [{"shop": "wb | ozon | ym", "url": "https://...", "title": "название товара", "price": "цена, если видна"}]}],
+  "items": [{"name": "что это, 2–4 слова", "cat": "ключ категории", "color": "ключ основного цвета", "details": "фасон и детали, одно предложение", "query": "точный запрос", "query_alt": "запасной запрос", "bbox": [0.3, 0.1, 0.7, 0.5], "x": 0.5, "y": 0.3, "links": [{"shop": "wb | ozon | ym", "url": "https://...", "title": "название товара", "price": "цена, если видна"}]}],
   "tip": "как повторить образ, одно-два предложения"
 }`;
 }
@@ -274,7 +276,7 @@ function cleanLink(l) {
     const u = new URL(String(l?.url || ""));
     if (u.protocol !== "https:") return null;
     const shop = Object.keys(SHOPS).find((k) => SHOPS[k].host.test(u.hostname));
-    if (!shop) return null;
+    if (!shop || !SHOPS[shop].card.test(u.pathname)) return null;
     return { shop, url: u.href, title: str(l?.title, 120), price: str(l?.price, 30) };
   } catch { return null; }
 }
@@ -286,7 +288,10 @@ export function parseLook(text) {
     cat: CAT_KEYS.has(it?.cat) ? it.cat : "acc",
     color: COLOR_KEYS.has(it?.color) ? it.color : "",
     details: str(it?.details, 200),
-    query: str(it?.query, 80) || str(it?.name, 60),
+    query: str(it?.query, 100) || str(it?.name, 60),
+    query_alt: str(it?.query_alt, 80),
+    bbox: Array.isArray(it?.bbox) && it.bbox.length === 4 && it.bbox.every((v) => Number.isFinite(Number(v)))
+      ? (([a, b, c, d]) => (c > a && d > b ? [a, b, c, d] : null))(it.bbox.map(clamp01)) : null,
     x: Number.isFinite(Number(it?.x)) ? clamp01(it.x) : null,
     y: Number.isFinite(Number(it?.y)) ? clamp01(it.y) : null,
     links: arr(it?.links).map(cleanLink).filter(Boolean).slice(0, 4),

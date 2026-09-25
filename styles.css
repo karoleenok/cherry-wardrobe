@@ -318,3 +318,14 @@ body.dragging,body.dragging .look-photo .pt{cursor:grabbing;user-select:none}
 .drape-img{position:relative;display:block;aspect-ratio:3/4;overflow:hidden;border-radius:10px;background:var(--sunk)}
 .drape-img img{width:100%;height:100%;object-fit:cover;display:block}
 .drape-img i{position:absolute;left:-10%;right:-10%;bottom:0;border-radius:50% 50% 0 0/28px 28px 0 0;box-shadow:0 -2px 8px rgba(0,0,0,.15)}
+/* разбор образа: вырезки и поиск */
+.si-head{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start}
+.si-crop{width:84px;height:110px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px}
+.si-k{font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.shop-item a:not(.shopbtn):not(.btn){color:var(--ink)}
+/* вишлист */
+.wgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.wcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px;display:grid;grid-template-columns:84px 1fr;gap:12px;align-items:start}
+.wcard.done{opacity:.6}
+.wc-img{width:84px;height:110px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px;display:block}
+.wc-img.sw{border-color:rgba(0,0,0,.1)}
