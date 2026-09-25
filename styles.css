@@ -329,6 +329,7 @@ body.dragging,body.dragging .look-photo .pt{cursor:grabbing;user-select:none}
 .wcard.done{opacity:.6}
 .wc-img{width:84px;height:110px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px;display:block}
 .wc-img.sw{border-color:rgba(0,0,0,.1)}
+.wc-full{grid-column:1/-1;min-width:0}
 /* найденные товары */
 .found{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border-radius:12px;padding:10px 12px;font-size:14px}
 .found.all{background:var(--green-soft)}
@@ -346,8 +347,96 @@ body.dragging,body.dragging .look-photo .pt{cursor:grabbing;user-select:none}
 .prod-side{display:grid;justify-items:end;gap:4px}
 .prod-price{font-size:14px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .prod-go{font-size:12px;color:var(--muted);white-space:nowrap}
-@media (max-width:520px){.prod{grid-template-columns:1fr}.prod-side{justify-items:start;grid-auto-flow:column;align-items:center}}
+.prod .pill{white-space:nowrap}
+/* в узком месте (карточка вишлиста, телефон) товар раскладывается по строкам */
+.prods{container-type:inline-size}
+@container (max-width:480px){
+  .prod{grid-template-columns:auto 1fr;grid-template-areas:"shop side" "body body";gap:8px 10px;align-items:center}
+  .prod-shop{grid-area:shop;justify-self:start}
+  .prod-body{grid-area:body}
+  .prod-side{grid-area:side;grid-auto-flow:column;justify-content:end;align-items:center;gap:8px}
+}
 .si-more{font-size:13px}
 .si-more summary{cursor:pointer;color:var(--muted)}
 .si-more[open]{display:grid;gap:8px}
 .si-more a{color:var(--ink)}
+/* ===== анимации ===== */
+/* 8. скелетоны: пока картинка грузится — мерцающая подложка */
+.ph:has(> img:not(.loaded)),.pin:has(> img:not(.loaded)),.look-card:has(> img:not(.loaded)){background:linear-gradient(100deg,var(--sunk) 30%,#f7f5f2 50%,var(--sunk) 70%);background-size:220% 100%;animation:shimmer 1.2s linear infinite}
+.ph img,.pin img,.look-card img,.si-crop,.selfie img{transition:opacity .35s ease}
+.ph img:not(.loaded),.pin img:not(.loaded),.look-card img:not(.loaded){opacity:0}
+@keyframes shimmer{to{background-position:-120% 0}}
+/* 8. наклон карточек */
+.card,.look-card,.pick{transition:transform .18s ease,box-shadow .18s ease;will-change:transform}
+.card:hover,.look-card:hover{box-shadow:0 10px 24px -14px rgba(29,26,27,.35)}
+/* 8. «Скопировано» */
+.btn.is-done{background:var(--green);border-color:var(--green);color:#fff}
+/* 8. вспышка сердечка */
+.fx-burst{position:fixed;z-index:50;pointer-events:none;width:0;height:0}
+.fx-burst i{position:absolute;left:-4px;top:-4px;width:8px;height:8px;border-radius:50%;background:var(--danger);animation:burst .7s cubic-bezier(.2,.8,.2,1) forwards}
+.fx-burst i:nth-child(even){background:#7DA8D9}
+.fx-burst b{position:absolute;left:-10px;top:-14px;font-size:22px;color:var(--danger);animation:heart .7s ease-out forwards}
+@keyframes burst{0%{transform:translate(0,0) scale(1);opacity:1}100%{transform:translate(var(--dx),var(--dy)) scale(.2);opacity:0}}
+@keyframes heart{0%{transform:scale(.3);opacity:0}35%{transform:scale(1.35);opacity:1}100%{transform:translateY(-26px) scale(1);opacity:0}}
+/* 4. полёт вещей */
+.fx-ghost{position:fixed;z-index:60;pointer-events:none;margin:0;border-radius:8px;overflow:hidden;box-shadow:0 8px 20px rgba(0,0,0,.25)}
+/* 4. живая погода */
+.wx{position:relative;display:inline-block;width:58px;height:48px;flex:none}
+.wx-sun{position:absolute;left:4px;top:2px;width:30px;height:30px;border-radius:50%;background:radial-gradient(circle,#ffd66b 55%,#ffc233 56%);box-shadow:0 0 0 5px rgba(255,210,90,.25);animation:sunpulse 3.2s ease-in-out infinite}
+.wx-sun{outline:2px dashed rgba(255,194,51,.55);outline-offset:6px;animation:sunspin 12s linear infinite,sunpulse 3.2s ease-in-out infinite}
+.wx-sun ~ .wx-cloud{left:18px;top:16px;transform:scale(.8)}
+.wx-cloud{position:absolute;left:6px;top:12px;width:44px;height:18px;border-radius:18px;background:#d9dde3;animation:drift 5s ease-in-out infinite alternate}
+.wx-cloud::before,.wx-cloud::after{content:"";position:absolute;border-radius:50%;background:inherit}
+.wx-cloud::before{width:22px;height:22px;left:7px;top:-11px}
+.wx-cloud::after{width:16px;height:16px;left:21px;top:-7px}
+.wx--rain .wx-cloud,.wx--storm .wx-cloud{background:#aab3bf}
+.wx--fog .wx-cloud{background:#cfd3d8;box-shadow:0 12px 0 -3px #e3e5e8,0 20px 0 -5px #eceef0}
+.wx-drop{position:absolute;top:30px;left:calc(12px + var(--i) * 8px);width:2px;height:8px;border-radius:2px;background:#6f9ed6;animation:drop 1s linear infinite;animation-delay:calc(var(--i) * -.23s)}
+.wx-flake{position:absolute;top:30px;left:calc(10px + var(--i) * 7px);width:5px;height:5px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px #c8d3df;animation:snow 2.2s linear infinite;animation-delay:calc(var(--i) * -.37s)}
+.wx-bolt{position:absolute;left:24px;top:28px;width:10px;height:16px;background:#ffc233;clip-path:polygon(50% 0,0 60%,45% 60%,30% 100%,100% 35%,55% 35%);animation:bolt 2.4s steps(1) infinite}
+@keyframes sunspin{to{transform:rotate(360deg)}}
+@keyframes sunpulse{50%{box-shadow:0 0 0 9px rgba(255,210,90,.12)}}
+@keyframes drift{to{transform:translateX(5px)}}
+.wx-sun ~ .wx-cloud{animation:drift2 5s ease-in-out infinite alternate}
+@keyframes drift2{from{transform:scale(.8)}to{transform:scale(.8) translateX(5px)}}
+@keyframes drop{0%{transform:translateY(0);opacity:0}15%{opacity:1}100%{transform:translateY(16px);opacity:0}}
+@keyframes snow{0%{transform:translate(0,0);opacity:0}15%{opacity:1}100%{transform:translate(4px,16px);opacity:0}}
+@keyframes bolt{0%,88%{opacity:0}90%,94%{opacity:1}96%{opacity:0}98%{opacity:1}}
+/* 5. конструктор: слот-машина и перетаскивание */
+.ph.spinning{filter:blur(1.2px) saturate(1.2)}
+.pickers{touch-action:pan-x}
+.pick{touch-action:pan-x;user-select:none}
+.drag-ghost{position:fixed;z-index:70;pointer-events:none;transform:rotate(-4deg) scale(1.05);box-shadow:0 16px 30px -10px rgba(0,0,0,.4);opacity:.95}
+.slot.drop-ok{border-color:var(--accent);border-style:dashed;background:var(--accent-soft)}
+.slot.drop-hover{transform:scale(1.04);box-shadow:0 0 0 4px var(--accent-soft)}
+.slot{transition:transform .15s ease,box-shadow .15s ease}
+body.dragging{cursor:grabbing}
+.score .pill{transition:background-color .3s ease,color .3s ease}
+/* 6. серия дней подряд */
+.cd.streak{border-color:var(--accent);box-shadow:0 0 0 1.5px var(--accent)}
+/* 7. живое зачёркивание в чек-листе */
+.checklist b{background:linear-gradient(currentColor,currentColor) no-repeat 0 55%/0 1.5px;transition:background-size .35s ease,color .2s}
+.checklist input:checked ~ span b{text-decoration:none;background-size:100% 1.5px}
+.checklist li{transition:opacity .2s}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important}
+  .card,.look-card,.pick{transform:none !important}
+}
+/* вишлист: товары на всю ширину карточки, адаптив карточки товара по ширине контейнера */
+.wgrid{grid-template-columns:repeat(auto-fill,minmax(min(100%,440px),1fr))}
+.wc-prods{grid-column:1/-1}
+.prods{container-type:inline-size}
+.prod{grid-template-columns:auto minmax(0,1fr) auto}
+.prod-side .pill,.prod-shop{white-space:nowrap}
+@container (max-width:460px){
+  .prod{grid-template-columns:minmax(0,1fr);gap:6px}
+  .prod-shop{justify-self:start}
+  .prod-side{grid-auto-flow:column;justify-content:start;justify-items:start;align-items:center;gap:10px}
+}
+.wc-full{grid-column:1/-1}
+@container (max-width:460px){
+  .prod{grid-template-columns:auto minmax(0,1fr);grid-template-areas:"shop side" "body body";gap:8px 10px}
+  .prod-shop{grid-area:shop;align-self:start}
+  .prod-body{grid-area:body}
+  .prod-side{grid-area:side;display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px 10px}
+}

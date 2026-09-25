@@ -1,6 +1,7 @@
 import { store, byNewest, persist, exportAll, importAll } from "./db.js";
 import { CATS, COLORS, STYLES, SEASONS, SEASON_TYPES, SCALES } from "./catalog.js";
 import { PINS } from "./pins.js";
+import * as FX from "./fx.js";
 import { weatherText, weatherNeeds, scoreOutfit, suggestOutfits, countCombos, dayKey, wearStats, wardrobeGaps, CAPSULE_PRESETS, buildCapsule, photoQuality, DRAPE_ROUNDS, drapeSummary } from "./logic.js";
 import { QUIZ } from "./bridge.js";
 import { SEASON_KB, KIBBE_KB, ARCHETYPES } from "./knowledge.js";
@@ -92,7 +93,7 @@ function bridgeBox(kind) {
 }
 async function copyPrompt() {
   const b = S.br; if (!b) return;
-  try { await navigator.clipboard.writeText(b.prompt); toast("Запрос скопирован. Теперь открой claude.ai"); }
+  try { await navigator.clipboard.writeText(b.prompt); FX.copied(document.querySelector('[data-act="br-copy"]')); toast("Запрос скопирован. Теперь открой claude.ai"); }
   catch {
     const ta = $("br-prompt");
     if (ta) { ta.closest("details").open = true; ta.focus(); ta.select(); try { document.execCommand("copy"); toast("Запрос скопирован"); } catch { toast("Выдели текст запроса и скопируй вручную"); } }
@@ -261,6 +262,8 @@ function renderTabs() {
   const tabs = [["today", "Сегодня", null], ["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["look", "Найти образ", S.looks.length || null], ["wish", "Вишлист", S.wishlist.filter((w) => !w.done).length || null], ["capsules", "Капсулы", S.capsules.length || null], ["stats", "Статистика", null], ["profile", "Мой типаж", null]];
   $("tabs").innerHTML = tabs.map((t) => `<button class="tab" role="tab" id="tab-${t[0]}" data-tab="${t[0]}" aria-selected="${S.tab === t[0]}">${t[1]}${t[2] != null ? `<span class="n">${t[2]}</span>` : ""}</button>`).join("");
 }
+const fxQueue = [];
+const afterRender = (fn) => fxQueue.push(fn);
 function render() {
   renderTabs();
   const m = $("main");
@@ -276,6 +279,8 @@ function render() {
   else if (S.tab === "stats") m.innerHTML = viewStats();
   else m.innerHTML = viewProfile();
   if (S.tab === "look" && S.lookRes) buildCrops();
+  FX.markCached(m);
+  if (fxQueue.length) { const q = fxQueue.splice(0); requestAnimationFrame(() => q.forEach((f) => { try { f(); } catch (e) { console.error(e); } })); }
 }
 
 /* ---------- гардероб ---------- */
@@ -414,7 +419,16 @@ function autoBuild() {
     const s = assess(outfitIds(b)).reduce((t, n) => t + (n[0] === "ok" ? 2 : n[0] === "warn" ? -1 : -4), 0) + Math.random() * 1.5;
     if (s > bs) { bs = s; best = b; }
   }
-  if (best) { S.build = best; render(); }
+  if (!best) return;
+  S.build = best;
+  afterRender(() => {
+    const slots = [...document.querySelectorAll(".board .slot.filled")].map((el) => {
+      const cat = el.dataset.slot, list = pool(cat);
+      return { el, frames: list.sort(() => Math.random() - 0.5).slice(0, 8).map((it) => tile(it).replace(/^<div class="ph">|<\/div>$/g, "")) };
+    });
+    FX.slotSpin(slots).then(() => FX.pillsIn(document.querySelector("#main")));
+  });
+  render();
 }
 function viewBuilder() {
   const b = S.build, ids = outfitIds(), usingDress = !!b.dress;
@@ -445,8 +459,41 @@ function choose(id) {
   const k = S.activeSlot, b = S.build;
   if (k === "acc") { const i = b.acc.indexOf(id); if (i >= 0) b.acc.splice(i, 1); else { if (b.acc.length >= 3) b.acc.shift(); b.acc.push(id); } }
   else { b[k] = b[k] === id ? null : id; if (k === "dress" && b.dress) { b.top = null; b.bottom = null; } if ((k === "top" || k === "bottom") && b[k]) b.dress = null; }
+  afterRender(() => { FX.magnet(document.querySelector(`.board .slot[data-slot="${k}"]`)); FX.pillsIn(document.querySelector("#main")); });
   render();
 }
+// Перетаскивание вещи из ленты в ячейку доски (мышью и пальцем).
+let dragPick = null;
+document.addEventListener("pointerdown", (e) => {
+  const pk = e.target.closest?.(".pickers .pick");
+  if (!pk || S.tab !== "builder") return;
+  dragPick = { id: pk.dataset.pick, x: e.clientX, y: e.clientY, el: pk, ghost: null, over: null };
+});
+document.addEventListener("pointermove", (e) => {
+  const dp = dragPick; if (!dp) return;
+  if (!dp.ghost) {
+    if (Math.hypot(e.clientX - dp.x, e.clientY - dp.y) < 8) return;
+    const r = dp.el.getBoundingClientRect();
+    dp.ghost = dp.el.cloneNode(true); dp.ghost.className = "pick drag-ghost";
+    Object.assign(dp.ghost.style, { width: r.width + "px", left: e.clientX - r.width / 2 + "px", top: e.clientY - 40 + "px" });
+    document.body.append(dp.ghost); document.body.classList.add("dragging");
+    const it = byId(dp.id); document.querySelectorAll(".board .slot").forEach((sl) => sl.classList.toggle("drop-ok", it && (sl.dataset.slot === it.cat)));
+  }
+  e.preventDefault();
+  dp.ghost.style.left = e.clientX - dp.ghost.offsetWidth / 2 + "px"; dp.ghost.style.top = e.clientY - 40 + "px";
+  const under = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".board .slot.drop-ok");
+  if (dp.over !== under) { dp.over?.classList.remove("drop-hover"); under?.classList.add("drop-hover"); dp.over = under; }
+});
+function endPickDrag() {
+  const dp = dragPick; dragPick = null; if (!dp?.ghost) return;
+  dp.ghost.remove(); document.body.classList.remove("dragging");
+  document.querySelectorAll(".board .slot").forEach((sl) => sl.classList.remove("drop-ok", "drop-hover"));
+  dp.suppressClick = true; suppressNextClick = true;
+  if (dp.over) { S.activeSlot = dp.over.dataset.slot; const b = S.build, k = S.activeSlot; if (k === "acc" ? !b.acc.includes(dp.id) : b[k] !== dp.id) choose(dp.id); else render(); }
+}
+let suppressNextClick = false;
+document.addEventListener("pointerup", endPickDrag);
+document.addEventListener("pointercancel", endPickDrag);
 async function saveOutfit(ids, title, why, source) {
   ids = ids.filter((x) => byId(x));
   if (ids.length < 2) { toast("Выбери хотя бы две вещи"); return; }
@@ -766,11 +813,17 @@ function weatherCard() {
   if (!w) return `<div class="panel weather"><span class="muted">${S.wBusy ? "Загружаю погоду…" : esc(S.wErr || "Нет данных о погоде")}</span></div>`;
   const wt = weatherText(w.code), needs = weatherNeeds(w);
   return `<div class="panel weather">
-    <div class="w-main"><span class="w-ico" aria-hidden="true">${wt.icon}</span><span class="w-t">${w.temp > 0 ? "+" : ""}${w.temp}°</span>
+    <div class="w-main">${weatherArt(w.code)}<span class="w-t">${w.temp > 0 ? "+" : ""}${w.temp}°</span>
       <span class="stack" style="gap:0"><b>${esc(wt.text)}</b><span class="muted small">ощущается как ${w.feels > 0 ? "+" : ""}${w.feels}° · днём ${w.tmin}…${w.tmax}° · осадки ${w.rainChance}% · ветер ${w.wind} км/ч</span></span></div>
     ${needs.advice.length ? `<ul class="w-adv">${needs.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
     <div class="row small muted" style="gap:10px"><span>${esc(w.place || "")}</span><button class="linkbtn" data-act="city-edit">сменить город</button><button class="linkbtn" data-act="w-refresh">обновить</button></div>
   </div>`;
+}
+
+function weatherArt(code) {
+  const k = code === 0 ? "sun" : [1, 2].includes(code) ? "partly" : [45, 48].includes(code) ? "fog" : [71, 73, 75, 77, 85, 86].includes(code) ? "snow" : [95, 96, 99].includes(code) ? "storm" : [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code) ? "rain" : "cloud";
+  const drops = (cls, n) => Array.from({ length: n }, (_, i) => `<i class="${cls}" style="--i:${i}"></i>`).join("");
+  return `<span class="wx wx--${k}" aria-hidden="true">${k === "sun" || k === "partly" ? '<span class="wx-sun"></span>' : ""}${k !== "sun" ? '<span class="wx-cloud"></span>' : ""}${k === "rain" || k === "storm" ? drops("wx-drop", 5) : ""}${k === "snow" ? drops("wx-flake", 6) : ""}${k === "storm" ? '<span class="wx-bolt"></span>' : ""}</span>`;
 }
 
 /* ---------- сегодня ---------- */
@@ -811,13 +864,15 @@ function calendar() {
   const lead = (first.getDay() + 6) % 7; // понедельник первым
   const byDate = Object.fromEntries(S.wears.map((w) => [w.date, w]));
   const today = dayKey();
+  const streak = new Set();
+  for (let dd = new Date(today + "T12:00"); byDate[dayKey(dd)]; dd.setDate(dd.getDate() - 1)) streak.add(dayKey(dd));
   let cells = "";
   for (let k = 0; k < lead; k++) cells += '<span class="cd empty"></span>';
   for (let d = 1; d <= days; d++) {
     const key = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     const w = byDate[key];
     const dots = w ? w.items.map(byId).filter(Boolean).slice(0, 4).map((it) => `<i style="background:${(COL[it.color] || {}).hex || "#ccc"}"></i>`).join("") : "";
-    cells += `<button class="cd${w ? " on" : ""}${key === today ? " is-today" : ""}${S.calDay === key ? " sel" : ""}" data-act="cal-day" data-d="${key}" aria-label="${fmtDay(key)}${w ? ", есть образ" : ""}"><span>${d}</span><span class="dots">${dots}</span></button>`;
+    cells += `<button class="cd${w ? " on" : ""}${key === today ? " is-today" : ""}${streak.size > 1 && streak.has(key) ? " streak" : ""}${S.calDay === key ? " sel" : ""}" data-act="cal-day" data-d="${key}" aria-label="${fmtDay(key)}${w ? ", есть образ" : ""}"><span>${d}</span><span class="dots">${dots}</span></button>`;
   }
   const sel = S.calDay && byDate[S.calDay];
   return `<div class="panel stack"><div class="row between"><h3>Календарь образов</h3><div class="row" style="gap:6px"><button class="btn ghost" style="padding:4px 10px" data-act="cal-prev" aria-label="Предыдущий месяц">‹</button><span class="small" style="min-width:110px;text-align:center">${RU_MONTHS[mo - 1]} ${y}</span><button class="btn ghost" style="padding:4px 10px" data-act="cal-next" aria-label="Следующий месяц">›</button></div></div>
@@ -878,7 +933,7 @@ function capsuleCard(cp, fresh) {
   const checked = new Set(cp.checked || []);
   const done = its.filter((i) => checked.has(i.id)).length;
   return `<div class="panel stack capsule" style="margin-top:14px">
-    <div class="row between"><div class="stack" style="gap:2px"><h3>${esc(cp.name || cp.title)}</h3><span class="muted small">${its.length} ${plural(its.length, "вещь", "вещи", "вещей")} → ${cp.combos} ${plural(cp.combos, "образ", "образа", "образов")}${fresh ? "" : ` · собрано ${done}/${its.length}`}</span></div>
+    <div class="row between"><div class="stack" style="gap:2px"><h3>${esc(cp.name || cp.title)}</h3><span class="muted small">${its.length} ${plural(its.length, "вещь", "вещи", "вещей")} → <b class="cap-n">${cp.combos}</b> ${plural(cp.combos, "образ", "образа", "образов")}${fresh ? "" : ` · собрано <span class="cap-done">${done}</span>/${its.length}`}</span></div>
       <div class="row" style="gap:6px">${fresh ? '<button class="btn cherry" style="padding:6px 12px;font-size:13px" data-act="cap-save">Сохранить</button><button class="btn ghost" style="padding:6px 12px;font-size:13px" data-act="cap-build">Собрать заново</button>' : `<button class="linkbtn" data-act="cap-del" data-id="${cp.id}">удалить</button>`}</div></div>
     <ul class="checklist">${its.map((it) => `<li><label><input type="checkbox" data-cap="${fresh ? "new" : cp.id}" data-item="${esc(it.id)}"${checked.has(it.id) ? " checked" : ""}>${tile(it)}<span><b>${esc(it.name)}</b><span class="muted small">${esc(CATT[it.cat] || "")}</span></span></label></li>`).join("")}</ul>
     ${cp.examples?.length ? `<div class="stack" style="gap:8px"><span class="k">Примеры образов из капсулы</span>${cp.examples.map((ids, n) => `<div class="row" style="gap:8px;align-items:center"><span class="lg-n">${n + 1}</span>${miniRow(ids)}</div>`).join("")}</div>` : ""}
@@ -961,7 +1016,7 @@ async function buildCrops() {
 }
 async function copyCrop(n) {
   const c = crops[cropKey(n)]; if (!c) return;
-  try { await navigator.clipboard.write([new ClipboardItem({ "image/png": c.png })]); toast("Фото вещи скопировано. Вставь его в поиск по фото"); }
+  try { await navigator.clipboard.write([new ClipboardItem({ "image/png": c.png })]); FX.copied(document.querySelector(`[data-act="crop-copy"][data-n="${n}"]`)); toast("Фото вещи скопировано. Вставь его в поиск по фото"); }
   catch { toast("Браузер не дал скопировать картинку. Нажми «Скачать» и загрузи файл в поиск по фото"); }
 }
 const MATCH_T = { exact: ["та же вещь", ""], very_close: ["очень похожа", ""], similar: ["похожа по духу", " warn"] };
@@ -1003,10 +1058,11 @@ function viewWishlist() {
       ${w.crop ? `<img class="wc-img" src="${w.crop}" alt="">` : `<i class="wc-img sw" style="background:${(COL[w.color] || {}).hex || "var(--sunk)"}"></i>`}
       <div class="stack" style="gap:4px;min-width:0"><b>${esc(w.title)}</b>
         <span class="muted small">${[CATT[w.cat], (COL[w.color] || {}).t, w.source].filter(Boolean).map(esc).join(" · ")}</span>
-        ${w.links?.length && !w.done ? `<div class="prods">${w.links.filter((l) => SHOPS[l.shop]).map(productCard).join("")}</div>` : ""}
-        ${w.query && !w.done && !w.links?.length ? `<div class="row" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(w.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>` : ""}
         <div class="row" style="gap:8px">${w.done ? '<span class="pill">куплено</span>' : `<button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="wish-bought" data-id="${w.id}">Купила</button>`}<button class="linkbtn" data-act="wish-del" data-id="${w.id}">убрать</button></div>
-      </div></div>`;
+      </div>
+      ${w.links?.length && !w.done ? `<div class="prods wc-full">${w.links.filter((l) => SHOPS[l.shop]).map(productCard).join("")}</div>` : ""}
+      ${w.query && !w.done && !w.links?.length ? `<div class="row wc-full" style="gap:6px">${Object.entries(SHOPS).map(([k, sh]) => `<a class="shopbtn ${k}" href="${sh.search(w.query)}" target="_blank" rel="noopener noreferrer">${sh.title} ↗</a>`).join("")}</div>` : ""}
+    </div>`;
   return `<div class="stack" style="gap:2px"><h2>Вишлист</h2><span class="muted small">Вещи, которые хочешь купить: из разобранных образов, из подсказок «Чего не хватает» и свои</span></div>
     <form class="row" id="wish-form" style="gap:8px;margin-top:14px"><label class="f" style="flex:1;min-width:200px"><span class="sr">Что купить</span><input type="text" id="wish-in" placeholder="Например: серебряные серьги-кольца" maxlength="80"></label><button class="btn cherry" type="submit">Добавить</button></form>
     ${open.length ? `<div class="wgrid" style="margin-top:14px">${open.map(card).join("")}</div>` : '<div class="empty" style="margin-top:14px">Пока пусто. Добавляй вещи кнопкой «В вишлист» во вкладках «Найти образ» и «Статистика» или впиши свою выше.</div>'}
@@ -1085,13 +1141,15 @@ document.addEventListener("click", async (e) => {
   const t = e.target.closest("button");
   if (!t) return;
   const d = t.dataset;
-  if (d.tab) { if (S.br && S.br.kind !== "analyze") S.br = null; S.tab = d.tab; try { sessionStorage.setItem("wd-tab", S.tab); } catch {} if (S.tab !== "wardrobe") { S.edit = null; S.draft = null; } render(); $("tab-" + S.tab)?.focus(); return; }
+  if (d.tab) { if (S.br && S.br.kind !== "analyze") S.br = null; S.tab = d.tab; try { sessionStorage.setItem("wd-tab", S.tab); } catch {} if (S.tab !== "wardrobe") { S.edit = null; S.draft = null; }
+    afterRender(() => { FX.tabIn($("main")); if (S.tab === "stats") { FX.countUp([...document.querySelectorAll(".tile-n b")]); FX.calendarIn($("main")); } });
+    render(); $("tab-" + S.tab)?.focus(); return; }
   if (d.filter) { S.filter = d.filter; render(); return; }
   if (d.edit) { const it = byId(d.edit); if (!it) return; S.edit = it.id; S.draft = { name: it.name, cat: it.cat, color: it.color, seasons: [...(it.seasons || [])], styles: [...(it.styles || [])], photo_path: it.photo_path, file: null, preview: null, price: it.price ?? "" }; render(); window.scrollTo(0, 0); return; }
   if (d.season) { readForm(); const a = S.draft.seasons, i = a.indexOf(d.season); i >= 0 ? a.splice(i, 1) : a.push(d.season); render(); return; }
   if (d.style) { readForm(); const a = S.draft.styles, i = a.indexOf(d.style); i >= 0 ? a.splice(i, 1) : a.push(d.style); render(); return; }
   if (d.slot) { S.activeSlot = d.slot; render(); return; }
-  if (d.pick) { choose(d.pick); return; }
+  if (d.pick) { if (suppressNextClick) { suppressNextClick = false; return; } choose(d.pick); return; }
   switch (d.act) {
     case "export": {
       toast("Собираю копию…");
@@ -1122,8 +1180,13 @@ document.addEventListener("click", async (e) => {
     case "locate": locate(); return;
     case "city-edit": S.editCity = true; render(); return;
     case "w-refresh": refreshWeather(true); return;
-    case "today-more": S.seed++; render(); return;
-    case "today-wear": { const o = S.todayList?.[+d.n]; if (o) logWear(o.items, "today"); return; }
+    case "today-more": S.seed++; afterRender(() => FX.shuffleIn([...document.querySelectorAll("#main .outfits .idea")])); render(); return;
+    case "today-wear": {
+      const o = S.todayList?.[+d.n]; if (!o) return;
+      FX.flyTo([...t.closest(".idea").querySelectorAll(".mini .ph")], $("tab-stats"));
+      afterRender(() => FX.checkPop(document.querySelector(".worn")));
+      logWear(o.items, "today"); return;
+    }
     case "today-open": { const o = S.todayList?.[+d.n]; if (o) tryOutfit(o); return; }
     case "today-save": { const o = S.todayList?.[+d.n]; if (o) saveOutfit(o.items, "На каждый день", S.weather ? "Под погоду: " + weatherPhrase() : "", "manual"); return; }
     case "today-ai": S.req.weather = weatherPhrase(); S.req.occasion ||= "на каждый день"; S.tab = "builder"; askAI(); window.scrollTo(0, 0); return;
@@ -1131,12 +1194,14 @@ document.addEventListener("click", async (e) => {
     case "wear-outfit": { const o = S.outfits.find((x) => x.id === d.id); if (o) logWear(o.items, "outfit"); return; }
     case "unwear": S.wears = S.wears.filter((w) => w.date !== d.date); await saveKv("wears", S.wears); if (S.calDay === d.date) S.calDay = null; toast("Отметка снята"); render(); return;
     case "cal-day": S.calDay = S.calDay === d.d ? null : d.d; render(); return;
-    case "cal-prev": case "cal-next": { const [y, m] = S.calMonth.split("-").map(Number); const dt = new Date(y, m - 1 + (d.act === "cal-next" ? 1 : -1), 1); S.calMonth = dayKey(dt).slice(0, 7); S.calDay = null; render(); return; }
+    case "cal-prev": case "cal-next": { afterRender(() => FX.calendarIn($("main"))); const [y, m] = S.calMonth.split("-").map(Number); const dt = new Date(y, m - 1 + (d.act === "cal-next" ? 1 : -1), 1); S.calMonth = dayKey(dt).slice(0, 7); S.calDay = null; render(); return; }
     case "build-with": { const it = byId(d.id); if (!it) return; S.build = EMPTY_BUILD(); if (it.cat === "acc") S.build.acc = [it.id]; else S.build[it.cat] = it.id; S.activeSlot = it.cat === "dress" ? "shoes" : it.cat === "top" ? "bottom" : "top"; S.fwOnly = false; S.tab = "builder"; render(); window.scrollTo(0, 0); return; }
     case "wish-add": {
       const g = wardrobeGaps(S.items, kindOf, { palette: analysis()?.palette || [] }).ideas.find((x) => x.key === d.key);
       if (!g) return;
       S.wishlist = [...S.wishlist, { id: newId(), key: g.key, title: g.title, cat: g.cat, color: g.color, query: `${(COL[g.color] || {}).t || ""} ${CATT[g.cat].toLowerCase()}`.trim(), source: "подсказка «Чего не хватает»", done: false, created_at: Date.now() }];
+      { const r = t.getBoundingClientRect(); FX.heartBurst(r.left + r.width / 2, r.top + r.height / 2); }
+      afterRender(() => FX.bump($("tab-wish")));
       await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
     }
     case "wish-del": S.wishlist = S.wishlist.filter((w) => w.id !== d.id); await saveKv("wishlist", S.wishlist); render(); return;
@@ -1166,6 +1231,8 @@ document.addEventListener("click", async (e) => {
     case "look-wish": {
       const it = S.lookRes?.items[+d.n]; if (!it) return;
       const cr = crops[cropKey(+d.n)];
+      { const r = t.getBoundingClientRect(); FX.heartBurst(r.left + r.width / 2, r.top + r.height / 2); }
+      afterRender(() => FX.bump($("tab-wish")));
       S.wishlist = [...S.wishlist, { id: newId(), title: it.name, cat: it.cat, color: it.color, fromLook: it.query, query: it.query, links: it.links, crop: cr?.small || null, source: "из образа «" + (S.lookRes.title || "") + "»", done: false, created_at: Date.now() }];
       await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
     }
@@ -1181,7 +1248,9 @@ document.addEventListener("click", async (e) => {
     case "cap-preset": S.cap.preset = d.k; render(); return;
     case "cap-season": S.cap.season = d.k; render(); return;
     case "cap-style": { const a = S.cap.styles, i = a.indexOf(d.k); i >= 0 ? a.splice(i, 1) : a.push(d.k); render(); return; }
-    case "cap-build": S.capResult = { ...buildCapsule(S.items, kindOf, S.cap), checked: [] }; render(); return;
+    case "cap-build": S.capResult = { ...buildCapsule(S.items, kindOf, S.cap), checked: [] };
+      afterRender(() => { const c = document.querySelector(".capsule"); if (!c) return; FX.packIn(c); FX.countUp([...c.querySelectorAll(".cap-n")], 1100); c.scrollIntoView({ behavior: FX.reduced() ? "auto" : "smooth", block: "start" }); });
+      render(); return;
     case "cap-save": {
       const r = S.capResult; if (!r) return;
       const name = `${r.title} · ${new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}`;
@@ -1258,7 +1327,11 @@ document.addEventListener("change", (e) => {
     const capId = e.target.dataset.cap, item = e.target.dataset.item, on = e.target.checked;
     const upd = (c) => ({ ...c, checked: on ? [...new Set([...(c.checked || []), item])] : (c.checked || []).filter((x) => x !== item) });
     if (capId === "new") { S.capResult = upd(S.capResult); }
-    else { S.capsules = S.capsules.map((c) => (c.id === capId ? upd(c) : c)); saveKv("capsules", S.capsules).then(render); }
+    else {
+      S.capsules = S.capsules.map((c) => (c.id === capId ? upd(c) : c)); saveKv("capsules", S.capsules);
+      const cp = S.capsules.find((c) => c.id === capId), el = e.target.closest(".capsule")?.querySelector(".cap-done");
+      if (cp && el) el.textContent = (cp.checked || []).filter((x) => byId(x)).length;
+    }
   }
 });
 document.addEventListener("input", (e) => {
@@ -1270,5 +1343,7 @@ document.addEventListener("dragleave", (e) => { e.target.closest?.("#drop")?.cla
 document.addEventListener("drop", (e) => { const lz = e.target.closest?.(".look-drop"); if (lz) { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) setLookFile(f); return; } const z = e.target.closest?.("#drop"); if (z) { e.preventDefault(); z.classList.remove("over"); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); } });
 
 /* ---------- запуск ---------- */
+FX.watchImages();
+FX.tilt();
 persist();
 loadAll();
