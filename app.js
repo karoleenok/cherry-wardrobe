@@ -1,6 +1,7 @@
 import { store, byNewest, persist, exportAll, importAll } from "./db.js";
 import { CATS, COLORS, STYLES, SEASONS, SEASON_TYPES, SCALES } from "./catalog.js";
 import { PINS } from "./pins.js";
+import { weatherText, weatherNeeds, scoreOutfit, suggestOutfits, countCombos, dayKey, wearStats, wardrobeGaps, CAPSULE_PRESETS, buildCapsule } from "./logic.js";
 import { CHAT_URL, MARK_KINDS, sampleable, analyzePrompt, parseAnalysis, tagPrompt, parseTag, outfitsPrompt, parseOutfits } from "./bridge.js";
 
 /* ---------- справочники ---------- */
@@ -17,7 +18,10 @@ function applyKinds(an) {
 /* ---------- состояние ---------- */
 const EMPTY_BUILD = () => ({ outer: null, top: null, bottom: null, dress: null, shoes: null, acc: [] });
 const S = {
-  tab: "wardrobe", loaded: false, importConfirm: null, br: null,
+  tab: "today", loaded: false, importConfirm: null, br: null,
+  settings: {}, weather: null, wErr: null, wBusy: false, seed: 1,
+  wears: [], wishlist: [], capsules: [], calMonth: dayKey().slice(0, 7), calDay: null,
+  cap: { preset: "week", season: "any", styles: [] }, capResult: null,
   items: [], outfits: [], profile: null, urls: {},
   filter: "all", edit: null, draft: null, delConfirm: null, saving: false, formErr: null,
   build: EMPTY_BUILD(), activeSlot: "top", fwOnly: true,
@@ -26,7 +30,7 @@ const S = {
   skipOnb: false, outDel: null, selfies: [], viewPhoto: 0,
 };
 try {
-  S.tab = sessionStorage.getItem("wd-tab") || "wardrobe";
+  S.tab = sessionStorage.getItem("wd-tab") || "today";
   S.skipOnb = sessionStorage.getItem("wd-skip") === "1";
 } catch {}
 
@@ -173,10 +177,16 @@ function downscale(file, max = 1000) {
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 async function loadAll() {
   try {
-    const [items, outfits, profile] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile")]);
+    const [items, outfits, profile, settings, wears, wishlist, capsules, weather] = await Promise.all([store.all("items"), store.all("outfits"), store.get("kv", "profile"),
+      store.get("kv", "settings"), store.get("kv", "wears"), store.get("kv", "wishlist"), store.get("kv", "capsules"), store.get("kv", "weather")]);
     S.items = items.sort(byNewest);
     S.outfits = outfits.sort(byNewest);
     S.profile = profile || null;
+    S.settings = settings || {};
+    S.wears = wears || [];
+    S.wishlist = wishlist || [];
+    S.capsules = capsules || [];
+    S.weather = weather || null;
   } catch (e) {
     console.error(e);
     $("main").innerHTML = '<div class="notice err">Браузер не даёт сохранять данные на этом сайте (например, в режиме инкогнито). Открой сайт в обычном окне.</div>';
@@ -186,6 +196,7 @@ async function loadAll() {
   await photoUrls();
   S.loaded = true;
   render();
+  refreshWeather();
 }
 async function photoUrls() {
   const keys = [...S.items.map((it) => it.photo_path), ...(S.profile?.photos || [])];
@@ -202,7 +213,7 @@ function dropUrl(path) { if (path && S.urls[path]) { URL.revokeObjectURL(S.urls[
 
 /* ---------- вкладки ---------- */
 function renderTabs() {
-  const tabs = [["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["profile", "Мой типаж", null]];
+  const tabs = [["today", "Сегодня", null], ["wardrobe", "Мои вещи", S.items.length], ["builder", "Конструктор", null], ["outfits", "Образы", S.outfits.length], ["capsules", "Капсулы", S.capsules.length || null], ["stats", "Статистика", null], ["profile", "Мой типаж", null]];
   $("tabs").innerHTML = tabs.map((t) => `<button class="tab" role="tab" id="tab-${t[0]}" data-tab="${t[0]}" aria-selected="${S.tab === t[0]}">${t[1]}${t[2] != null ? `<span class="n">${t[2]}</span>` : ""}</button>`).join("");
 }
 function render() {
@@ -213,6 +224,9 @@ function render() {
   if (S.tab === "wardrobe") m.innerHTML = S.edit ? viewForm() : viewWardrobe();
   else if (S.tab === "builder") m.innerHTML = viewBuilder();
   else if (S.tab === "outfits") m.innerHTML = viewOutfits();
+  else if (S.tab === "today") m.innerHTML = viewToday();
+  else if (S.tab === "capsules") m.innerHTML = viewCapsules();
+  else if (S.tab === "stats") m.innerHTML = viewStats();
   else m.innerHTML = viewProfile();
 }
 
@@ -231,7 +245,7 @@ function viewWardrobe() {
     return `<button class="card" data-edit="${esc(it.id)}">${tile(it).replace('<div class="ph">', '<div class="ph">' + badge)}<span class="meta"><b>${esc(it.name)}</b><span><i class="dot" style="background:${c.hex}"></i>${esc(c.t)} · ${esc(CATT[it.cat] || "")}</span></span></button>`;
   }).join("") + "</div>";
 }
-const blankDraft = () => ({ name: "", cat: "top", color: "black", seasons: ["fw"], styles: [], photo_path: null, file: null, preview: null });
+const blankDraft = () => ({ name: "", cat: "top", color: "black", seasons: ["fw"], styles: [], photo_path: null, file: null, preview: null, price: "" });
 function viewForm() {
   const d = S.draft, isNew = S.edit === "new", c = COL[d.color] || {};
   const img = d.preview || (d.photo_path ? S.urls[d.photo_path] : null);
@@ -244,6 +258,7 @@ function viewForm() {
   </div><div class="stack">
     ${bridgeBox("tag")}
     <label class="f">Название<input type="text" id="f-name" value="${esc(d.name)}" placeholder="Например: чёрная водолазка" maxlength="80"></label>
+    <label class="f" style="max-width:220px">Цена, ₽ <span class="muted" style="font-weight:500">(необязательно, для цены за выход)</span><input type="text" inputmode="numeric" id="f-price" value="${esc(d.price ?? "")}" placeholder="например, 3500" maxlength="9"></label>
     <div class="row" style="gap:12px;align-items:end">
       <label class="f" style="flex:1;min-width:160px">Категория<select id="f-cat">${CATS.map((x) => `<option value="${x.id}"${d.cat === x.id ? " selected" : ""}>${x.t}</option>`).join("")}</select></label>
       <label class="f" style="flex:1;min-width:160px">Цвет<select id="f-color">${COLORS.map((x) => `<option value="${x[0]}"${d.color === x[0] ? " selected" : ""}>${x[1]}${COL[x[0]].kind === "avoid" ? " (не твой)" : ""}</option>`).join("")}</select></label>
@@ -266,6 +281,7 @@ function readForm() {
   if ($("f-name")) d.name = $("f-name").value;
   if ($("f-cat")) d.cat = $("f-cat").value;
   if ($("f-color")) d.color = $("f-color").value;
+  if ($("f-price")) d.price = $("f-price").value;
 }
 async function setFile(file) {
   if (!file || !/^image\//.test(file.type)) { toast("Нужна картинка: JPG, PNG или WebP"); return; }
@@ -291,7 +307,8 @@ async function saveItem() {
       if (d.photo_path) { await store.del("photos", d.photo_path); dropUrl(d.photo_path); }
       photo_path = path;
     }
-    const row = { name: d.name.trim().slice(0, 80), cat: d.cat, color: d.color, seasons: d.seasons, styles: d.styles, photo_path };
+    const price = parseInt(String(d.price || "").replace(/\D/g, ""), 10);
+    const row = { name: d.name.trim().slice(0, 80), cat: d.cat, color: d.color, seasons: d.seasons, styles: d.styles, photo_path, price: price > 0 ? price : null };
     const old = S.edit === "new" ? null : byId(S.edit);
     await store.put("items", { ...row, id: old ? old.id : newId(), created_at: old ? old.created_at : Date.now() });
     await reloadItems();
@@ -365,7 +382,7 @@ function viewBuilder() {
     <div class="row">${usingDress ? '<button class="chip" data-act="no-dress">Вернуть верх и низ</button>' : `<button class="chip" data-slot="dress" aria-pressed="${S.activeSlot === "dress"}">Платье вместо верха и низа</button>`}</div>
     <div class="score">${assess(ids).map((n) => `<span class="pill${n[0] === "ok" ? "" : " " + n[0]}">${esc(n[1])}</span>`).join("")}</div>
     <div class="panel stack" style="gap:10px"><div class="row between"><h3>${esc((SLOTS.find((s) => s[0] === S.activeSlot) || [])[1] || "")}</h3><span class="muted small">${S.activeSlot === "acc" ? "можно до 3" : "нажми ещё раз, чтобы убрать"}</span></div>${viewPickers()}</div>
-    <div class="row"><label class="f" style="flex:1;min-width:180px"><span class="sr">Название образа</span><input type="text" id="outfit-title" placeholder="Название образа, например «Пятница в городе»" maxlength="60"></label><button class="btn cherry" data-act="save-outfit"${ids.length < 2 ? " disabled" : ""}>Сохранить образ</button></div>
+    <div class="row"><label class="f" style="flex:1;min-width:180px"><span class="sr">Название образа</span><input type="text" id="outfit-title" placeholder="Название образа, например «Пятница в городе»" maxlength="60"></label><button class="btn cherry" data-act="save-outfit"${ids.length < 2 ? " disabled" : ""}>Сохранить образ</button><button class="btn ghost" data-act="wear-build"${ids.length < 2 ? " disabled" : ""}>Надела сегодня</button></div>
   </div>${viewAI()}</div>`;
 }
 function viewPickers() {
@@ -431,7 +448,7 @@ function viewOutfits() {
       ${gone ? `<span class="small" style="color:var(--warn)">${gone} вещ. уже нет в гардеробе</span>` : ""}
       <div class="row">${S.outDel === o.id
         ? `<span class="small">Удалить образ?</span><button class="btn danger" style="${sm}" data-act="out-del-yes" data-id="${esc(o.id)}">Да</button><button class="btn ghost" style="${sm}" data-act="out-del-no">Нет</button>`
-        : `<button class="btn ghost" style="${sm}" data-act="out-open" data-id="${esc(o.id)}">Открыть в конструкторе</button><button class="btn ghost" style="${sm}" data-act="out-del" data-id="${esc(o.id)}">Удалить</button>`}</div></div>`;
+        : `<button class="btn ghost" style="${sm}" data-act="wear-outfit" data-id="${esc(o.id)}">Надела сегодня</button><button class="btn ghost" style="${sm}" data-act="out-open" data-id="${esc(o.id)}">Открыть в конструкторе</button><button class="btn ghost" style="${sm}" data-act="out-del" data-id="${esc(o.id)}">Удалить</button>`}</div></div>`;
   }).join("") + "</div>";
 }
 
@@ -629,6 +646,187 @@ async function saveProfileText(text) {
   toast(text ? "Текст сохранён" : "Текст собран из разбора"); render();
 }
 
+/* ---------- общие помощники для новых разделов ---------- */
+const kindOf = (c) => COL[c]?.kind || "neutral";
+const RU_MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+const fmtDay = (key) => new Date(key + "T12:00").toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+const miniRow = (ids) => `<div class="mini">${ids.filter(byId).map((id) => tile(byId(id))).join("")}</div>`;
+const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c; };
+async function saveKv(key, value) { try { await store.put("kv", value, key); } catch { toast("Не получилось сохранить"); } }
+async function logWear(ids, source) {
+  ids = [...new Set(ids.filter((x) => byId(x)))];
+  if (ids.length < 2) { toast("Выбери хотя бы две вещи"); return; }
+  const today = dayKey();
+  S.wears = [...S.wears.filter((w) => w.date !== today), { date: today, items: ids, source }];
+  await saveKv("wears", S.wears);
+  toast("Отмечено: надето сегодня"); render();
+}
+
+/* ---------- погода ---------- */
+async function geocode(q) {
+  const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=ru&format=json`);
+  const j = await r.json();
+  const g = j.results?.[0];
+  if (!g) throw new Error("Город не найден. Попробуй написать иначе.");
+  return { lat: g.latitude, lon: g.longitude, place: [g.name, g.admin1, g.country].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).slice(0, 2).join(", ") };
+}
+async function refreshWeather(force = false) {
+  const st = S.settings;
+  if (!st.lat) return;
+  if (!force && S.weather && S.weather.place === st.place && Date.now() - S.weather.at < 60 * 60 * 1000) return;
+  S.wBusy = true; S.wErr = null; if (S.tab === "today") render();
+  try {
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${st.lat}&longitude=${st.lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1`;
+    const j = await (await fetch(u)).json();
+    const c = j.current || {}, dly = j.daily || {};
+    S.weather = { place: st.place, at: Date.now(), temp: Math.round(c.temperature_2m), feels: Math.round(c.apparent_temperature), code: c.weather_code, wind: Math.round(c.wind_speed_10m || 0),
+      tmax: Math.round(dly.temperature_2m_max?.[0]), tmin: Math.round(dly.temperature_2m_min?.[0]), rainChance: dly.precipitation_probability_max?.[0] ?? 0 };
+    await saveKv("weather", S.weather);
+  } catch { S.wErr = "Не получилось загрузить погоду. Проверь интернет и попробуй ещё раз."; }
+  S.wBusy = false; if (S.tab === "today") render();
+}
+async function setCity(q) {
+  S.wBusy = true; S.wErr = null; render();
+  try { const g = await geocode(q); S.settings = { ...S.settings, ...g }; await saveKv("settings", S.settings); await refreshWeather(true); }
+  catch (e) { S.wBusy = false; S.wErr = e.message; render(); }
+}
+function locate() {
+  if (!navigator.geolocation) { S.wErr = "Браузер не даёт определить местоположение. Введи город."; render(); return; }
+  S.wBusy = true; render();
+  navigator.geolocation.getCurrentPosition(async (p) => {
+    S.settings = { ...S.settings, lat: +p.coords.latitude.toFixed(3), lon: +p.coords.longitude.toFixed(3), place: "Моё местоположение" };
+    await saveKv("settings", S.settings); await refreshWeather(true);
+  }, () => { S.wBusy = false; S.wErr = "Нет доступа к местоположению. Введи город вручную."; render(); }, { timeout: 10000 });
+}
+function weatherCard() {
+  const w = S.weather, st = S.settings;
+  const form = `<form class="row" id="city-form" style="gap:8px"><label class="f" style="flex:1;min-width:180px"><span class="sr">Город</span><input type="text" id="city-in" placeholder="Город, например Москва" value="${esc(S.cityDraft || "")}" maxlength="60"></label><button class="btn" type="submit"${S.wBusy ? " disabled" : ""}>Показать погоду</button><button class="btn ghost" type="button" data-act="locate">По геолокации</button></form>`;
+  if (!st.lat || S.editCity) return `<div class="panel stack weather"><h3>Погода</h3><span class="muted small">Укажи город, чтобы образы подбирались под погоду. Он сохранится только в этом браузере.</span>${form}${S.wErr ? `<div class="notice err small">${esc(S.wErr)}</div>` : ""}</div>`;
+  if (!w) return `<div class="panel weather"><span class="muted">${S.wBusy ? "Загружаю погоду…" : esc(S.wErr || "Нет данных о погоде")}</span></div>`;
+  const wt = weatherText(w.code), needs = weatherNeeds(w);
+  return `<div class="panel weather">
+    <div class="w-main"><span class="w-ico" aria-hidden="true">${wt.icon}</span><span class="w-t">${w.temp > 0 ? "+" : ""}${w.temp}°</span>
+      <span class="stack" style="gap:0"><b>${esc(wt.text)}</b><span class="muted small">ощущается как ${w.feels > 0 ? "+" : ""}${w.feels}° · днём ${w.tmin}…${w.tmax}° · осадки ${w.rainChance}% · ветер ${w.wind} км/ч</span></span></div>
+    ${needs.advice.length ? `<ul class="w-adv">${needs.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+    <div class="row small muted" style="gap:10px"><span>${esc(w.place || "")}</span><button class="linkbtn" data-act="city-edit">сменить город</button><button class="linkbtn" data-act="w-refresh">обновить</button></div>
+  </div>`;
+}
+
+/* ---------- сегодня ---------- */
+function viewToday() {
+  const today = dayKey(), worn = S.wears.find((w) => w.date === today);
+  const dateStr = new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
+  let h = `<div class="stack" style="gap:2px"><span class="muted small" style="font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase">${esc(dateStr)}</span><h2>Что надеть сегодня</h2></div>
+    <div class="today" style="margin-top:14px">${weatherCard()}`;
+  if (worn) h += `<div class="panel stack worn"><div class="row between"><h3>Сегодня надето ✓</h3><button class="linkbtn" data-act="unwear" data-date="${today}">снять отметку</button></div>${miniRow(worn.items)}</div>`;
+  h += "</div>";
+  if (S.items.length < 3) return h + '<div class="empty" style="margin-top:16px">Добавь хотя бы 3 вещи во вкладке «Мои вещи», и здесь появятся образы на сегодня.</div>';
+  const yesterday = dayKey(new Date(Date.now() - 86400000));
+  const exclude = S.wears.find((w) => w.date === yesterday)?.items || [];
+  const needs = weatherNeeds(S.weather);
+  const list = suggestOutfits(S.items, kindOf, needs, { n: 3, seed: S.seed + Number(today.replace(/-/g, "")), exclude });
+  S.todayList = list;
+  h += `<div class="row between" style="margin-top:22px"><h3>${S.weather ? "Под сегодняшнюю погоду" : "Образы из твоих вещей"}</h3><div class="row" style="gap:8px"><button class="btn ghost" data-act="today-more">↻ Другие варианты</button><button class="btn ghost" data-act="today-ai">✦ Спросить Claude</button></div></div>`;
+  if (!list.length) return h + '<div class="empty" style="margin-top:12px">Не получилось собрать образ: добавь вещи разных категорий (верх, низ, обувь).</div>';
+  h += '<div class="outfits" style="margin-top:12px">' + list.map((o, n) => {
+    const its = o.items.map(byId).filter(Boolean);
+    const notes = assess(o.items).filter((x) => x[0] !== "ok" || /Стиль|акцент/.test(x[1]));
+    return `<div class="idea"><div class="row between"><b>Вариант ${n + 1}</b><span class="muted small">${its.length} ${plural(its.length, "вещь", "вещи", "вещей")}</span></div>
+      ${miniRow(o.items)}
+      <div class="score">${notes.map((x) => `<span class="pill${x[0] === "ok" ? "" : " " + x[0]}">${esc(x[1])}</span>`).join("")}</div>
+      <div class="row" style="gap:6px"><button class="btn cherry" style="padding:6px 12px;font-size:13px" data-act="today-wear" data-n="${n}">Надену это</button><button class="btn ghost" style="padding:6px 12px;font-size:13px" data-act="today-open" data-n="${n}">В конструктор</button><button class="btn ghost" style="padding:6px 12px;font-size:13px" data-act="today-save" data-n="${n}">Сохранить</button></div></div>`;
+  }).join("") + "</div>";
+  return h;
+}
+function weatherPhrase() {
+  const w = S.weather; if (!w) return "";
+  return `${w.temp > 0 ? "+" : ""}${w.temp}°, ${weatherText(w.code).text}, осадки ${w.rainChance}%`;
+}
+
+/* ---------- статистика ---------- */
+function calendar() {
+  const [y, mo] = S.calMonth.split("-").map(Number);
+  const first = new Date(y, mo - 1, 1), days = new Date(y, mo, 0).getDate();
+  const lead = (first.getDay() + 6) % 7; // понедельник первым
+  const byDate = Object.fromEntries(S.wears.map((w) => [w.date, w]));
+  const today = dayKey();
+  let cells = "";
+  for (let k = 0; k < lead; k++) cells += '<span class="cd empty"></span>';
+  for (let d = 1; d <= days; d++) {
+    const key = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const w = byDate[key];
+    const dots = w ? w.items.map(byId).filter(Boolean).slice(0, 4).map((it) => `<i style="background:${(COL[it.color] || {}).hex || "#ccc"}"></i>`).join("") : "";
+    cells += `<button class="cd${w ? " on" : ""}${key === today ? " is-today" : ""}${S.calDay === key ? " sel" : ""}" data-act="cal-day" data-d="${key}" aria-label="${fmtDay(key)}${w ? ", есть образ" : ""}"><span>${d}</span><span class="dots">${dots}</span></button>`;
+  }
+  const sel = S.calDay && byDate[S.calDay];
+  return `<div class="panel stack"><div class="row between"><h3>Календарь образов</h3><div class="row" style="gap:6px"><button class="btn ghost" style="padding:4px 10px" data-act="cal-prev" aria-label="Предыдущий месяц">‹</button><span class="small" style="min-width:110px;text-align:center">${RU_MONTHS[mo - 1]} ${y}</span><button class="btn ghost" style="padding:4px 10px" data-act="cal-next" aria-label="Следующий месяц">›</button></div></div>
+    <div class="cal"><span class="cw">пн</span><span class="cw">вт</span><span class="cw">ср</span><span class="cw">чт</span><span class="cw">пт</span><span class="cw">сб</span><span class="cw">вс</span>${cells}</div>
+    ${sel ? `<div class="stack" style="gap:8px"><div class="row between"><b>${fmtDay(S.calDay)}</b><button class="linkbtn" data-act="unwear" data-date="${S.calDay}">удалить отметку</button></div>${miniRow(sel.items)}</div>` : '<span class="muted small">Нажми на день с точками, чтобы увидеть образ. Отмечай образы кнопкой «Надену это» или «Надела сегодня».</span>'}</div>`;
+}
+function viewStats() {
+  const st = wearStats(S.items, S.wears);
+  const never = st.rows.filter((r) => r.count === 0).length;
+  const tiles = [[st.totalWears, "отметок всего"], [st.month, "в этом месяце"], [st.streak, st.streak === 1 ? "день подряд" : "дней подряд"], [never, "вещей ещё не надевала"]];
+  let h = `<div class="stack" style="gap:2px"><h2>Статистика</h2><span class="muted small">Что ты носишь на самом деле и чего не хватает гардеробу</span></div>
+    <div class="tiles">${tiles.map(([n, l]) => `<div class="tile-n"><b>${n}</b><span>${l}</span></div>`).join("")}</div>
+    <div class="an-grid two">${calendar()}<div class="stack">`;
+  const top = st.byCount.filter((r) => r.count > 0).slice(0, 5);
+  h += `<div class="panel stack"><h3>Чаще всего</h3>${top.length ? `<ol class="rank">${top.map((r) => { const it = byId(r.id); return `<li>${tile(it)}<span><b>${esc(it.name)}</b><span class="muted small">${r.count} ${plural(r.count, "раз", "раза", "раз")}${r.cpw ? ` · ${r.cpw.toLocaleString("ru-RU")} ₽ за выход` : ""}</span></span></li>`; }).join("")}</ol>` : '<span class="muted small">Пока нет отметок.</span>'}</div>`;
+  const idle = st.idle.slice(0, 6);
+  h += `<div class="panel stack"><h3>Давно не надевала</h3>${idle.length ? `<ol class="rank">${idle.map((r) => { const it = byId(r.id); return `<li>${tile(it)}<span><b>${esc(it.name)}</b><span class="muted small">${r.since === null ? "ещё ни разу" : `${r.since} ${plural(r.since, "день", "дня", "дней")} назад`}</span></span><button class="btn ghost" style="padding:4px 10px;font-size:12.5px" data-act="build-with" data-id="${esc(it.id)}">Собрать образ</button></li>`; }).join("")}</ol>` : '<span class="muted small">Все вещи в ходу.</span>'}</div>`;
+  const priced = st.rows.filter((r) => r.cpw).sort((a, b) => b.cpw - a.cpw).slice(0, 6);
+  h += `<div class="panel stack"><h3>Цена за выход</h3>${priced.length ? `<ol class="rank">${priced.map((r) => { const it = byId(r.id); return `<li>${tile(it)}<span><b>${esc(it.name)}</b><span class="muted small">${it.price.toLocaleString("ru-RU")} ₽ · ${r.count} ${plural(r.count, "выход", "выхода", "выходов")}</span></span><b class="cpw">${r.cpw.toLocaleString("ru-RU")} ₽</b></li>`; }).join("")}</ol>` : '<span class="muted small">Укажи цену в карточке вещи, и здесь появится стоимость одного выхода.</span>'}</div>`;
+  h += "</div></div>" + viewGaps();
+  return h;
+}
+
+/* ---------- чего не хватает + вишлист ---------- */
+function viewGaps() {
+  const a = analysis();
+  const season = S.weather ? weatherNeeds(S.weather).season : "any";
+  const g = wardrobeGaps(S.items, kindOf, { palette: a?.palette || [], season });
+  let h = `<div class="stack" style="margin-top:22px;gap:12px"><div class="stack" style="gap:2px"><h2>Чего не хватает</h2><span class="muted small">Сейчас гардероб даёт ${g.base} ${plural(g.base, "базовый образ", "базовых образа", "базовых образов")}${season !== "any" ? " на этот сезон" : ""}. Вот что добавит больше всего новых сочетаний.</span></div>`;
+  h += '<div class="gaps">' + g.ideas.map((x) => {
+    const inList = S.wishlist.some((w) => w.key === x.key && !w.done);
+    return `<div class="gap"><i class="gsw" style="background:${(COL[x.color] || {}).hex || "#ccc"}"></i><span class="stack" style="gap:2px"><b>${esc(x.title)}</b><span class="muted small">${esc(x.why)}. Например: ${esc((COL[x.color] || {}).t || "")}, ${esc(CATT[x.cat].toLowerCase())}.</span>
+      <span class="row" style="gap:6px">${x.urgent ? '<span class="pill bad">важно</span>' : ""}${x.gain > 0 ? `<span class="pill">+${x.gain} ${plural(x.gain, "образ", "образа", "образов")}</span>` : ""}</span></span>
+      <button class="btn ghost" style="padding:5px 10px;font-size:12.5px" data-act="wish-add" data-key="${x.key}"${inList ? " disabled" : ""}>${inList ? "В вишлисте" : "В вишлист"}</button></div>`;
+  }).join("") + "</div>";
+  if (g.faceAvoid.length) h += `<div class="notice warn small">У лица сейчас ${g.faceAvoid.length} ${plural(g.faceAvoid.length, "вещь", "вещи", "вещей")} не из твоей палитры: ${g.faceAvoid.map((id) => esc(byId(id)?.name)).join(", ")}. Их можно сочетать с шарфом или воротником подходящего цвета.</div>`;
+  const open = S.wishlist.filter((w) => !w.done);
+  h += `<div class="panel stack"><h3>Вишлист</h3>
+    ${open.length ? `<ul class="wish">${open.map((w) => `<li><i class="gsw sm" style="background:${(COL[w.color] || {}).hex || "#ccc"}"></i><span class="stack" style="gap:0"><b>${esc(w.title)}</b>${w.cat ? `<span class="muted small">${esc(CATT[w.cat] || "")}${w.color ? " · " + esc((COL[w.color] || {}).t || "") : ""}</span>` : ""}</span><button class="btn ghost" style="padding:4px 10px;font-size:12.5px" data-act="wish-bought" data-id="${w.id}">Купила</button><button class="linkbtn" data-act="wish-del" data-id="${w.id}">убрать</button></li>`).join("")}</ul>` : '<span class="muted small">Добавляй сюда вещи, которые хочешь купить.</span>'}
+    <form class="row" id="wish-form" style="gap:8px"><label class="f" style="flex:1;min-width:180px"><span class="sr">Что купить</span><input type="text" id="wish-in" placeholder="Например: серебряные серьги-кольца" maxlength="80"></label><button class="btn ghost" type="submit">Добавить</button></form>
+  </div></div>`;
+  return h;
+}
+
+/* ---------- капсулы ---------- */
+function viewCapsules() {
+  const c = S.cap, r = S.capResult;
+  let h = `<div class="stack" style="gap:2px"><h2>Капсулы</h2><span class="muted small">Небольшой набор вещей из твоего гардероба, который даёт максимум сочетаний</span></div>
+  <div class="panel stack" style="margin-top:14px">
+    <div class="fieldset"><span>Для чего</span><div class="chips">${Object.entries(CAPSULE_PRESETS).map(([k, p]) => `<button class="chip" data-act="cap-preset" data-k="${k}" aria-pressed="${c.preset === k}">${p.title} · ${p.size}</button>`).join("")}</div></div>
+    <div class="fieldset"><span>Сезон</span><div class="chips">${[["any", "любой"], ...SEASONS].map(([k, t]) => `<button class="chip" data-act="cap-season" data-k="${k}" aria-pressed="${c.season === k}">${t}</button>`).join("")}</div></div>
+    <div class="fieldset"><span>Стиль <span class="muted" style="font-weight:500">(необязательно)</span></span><div class="chips">${STYLES.map(([k, t]) => `<button class="chip" data-act="cap-style" data-k="${k}" aria-pressed="${c.styles.includes(k)}">${t}</button>`).join("")}</div></div>
+    <div class="row"><button class="btn cherry" data-act="cap-build"${S.items.length < 4 ? " disabled" : ""}>Собрать капсулу</button>${S.items.length < 4 ? '<span class="muted small">Нужно хотя бы 4 вещи</span>' : ""}</div>
+  </div>`;
+  if (r) h += capsuleCard(r, true);
+  if (S.capsules.length) h += `<div class="stack" style="margin-top:22px"><h3>Сохранённые капсулы</h3>${S.capsules.map((cp) => capsuleCard(cp, false)).join("")}</div>`;
+  return h;
+}
+function capsuleCard(cp, fresh) {
+  const its = cp.items.map(byId).filter(Boolean);
+  const checked = new Set(cp.checked || []);
+  const done = its.filter((i) => checked.has(i.id)).length;
+  return `<div class="panel stack capsule" style="margin-top:14px">
+    <div class="row between"><div class="stack" style="gap:2px"><h3>${esc(cp.name || cp.title)}</h3><span class="muted small">${its.length} ${plural(its.length, "вещь", "вещи", "вещей")} → ${cp.combos} ${plural(cp.combos, "образ", "образа", "образов")}${fresh ? "" : ` · собрано ${done}/${its.length}`}</span></div>
+      <div class="row" style="gap:6px">${fresh ? '<button class="btn cherry" style="padding:6px 12px;font-size:13px" data-act="cap-save">Сохранить</button><button class="btn ghost" style="padding:6px 12px;font-size:13px" data-act="cap-build">Собрать заново</button>' : `<button class="linkbtn" data-act="cap-del" data-id="${cp.id}">удалить</button>`}</div></div>
+    <ul class="checklist">${its.map((it) => `<li><label><input type="checkbox" data-cap="${fresh ? "new" : cp.id}" data-item="${esc(it.id)}"${checked.has(it.id) ? " checked" : ""}>${tile(it)}<span><b>${esc(it.name)}</b><span class="muted small">${esc(CATT[it.cat] || "")}</span></span></label></li>`).join("")}</ul>
+    ${cp.examples?.length ? `<div class="stack" style="gap:8px"><span class="k">Примеры образов из капсулы</span>${cp.examples.map((ids, n) => `<div class="row" style="gap:8px;align-items:center"><span class="lg-n">${n + 1}</span>${miniRow(ids)}</div>`).join("")}</div>` : ""}
+  </div>`;
+}
+
 /* ---------- события ---------- */
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("button");
@@ -636,7 +834,7 @@ document.addEventListener("click", async (e) => {
   const d = t.dataset;
   if (d.tab) { if (S.br && S.br.kind !== "analyze") S.br = null; S.tab = d.tab; try { sessionStorage.setItem("wd-tab", S.tab); } catch {} if (S.tab !== "wardrobe") { S.edit = null; S.draft = null; } render(); $("tab-" + S.tab)?.focus(); return; }
   if (d.filter) { S.filter = d.filter; render(); return; }
-  if (d.edit) { const it = byId(d.edit); if (!it) return; S.edit = it.id; S.draft = { name: it.name, cat: it.cat, color: it.color, seasons: [...(it.seasons || [])], styles: [...(it.styles || [])], photo_path: it.photo_path, file: null, preview: null }; render(); window.scrollTo(0, 0); return; }
+  if (d.edit) { const it = byId(d.edit); if (!it) return; S.edit = it.id; S.draft = { name: it.name, cat: it.cat, color: it.color, seasons: [...(it.seasons || [])], styles: [...(it.styles || [])], photo_path: it.photo_path, file: null, preview: null, price: it.price ?? "" }; render(); window.scrollTo(0, 0); return; }
   if (d.season) { readForm(); const a = S.draft.seasons, i = a.indexOf(d.season); i >= 0 ? a.splice(i, 1) : a.push(d.season); render(); return; }
   if (d.style) { readForm(); const a = S.draft.styles, i = a.indexOf(d.style); i >= 0 ? a.splice(i, 1) : a.push(d.style); render(); return; }
   if (d.slot) { S.activeSlot = d.slot; render(); return; }
@@ -668,6 +866,44 @@ document.addEventListener("click", async (e) => {
     case "del-no": S.delConfirm = null; render(); return;
     case "del-yes": deleteItem(S.edit); return;
     case "autotag": autotag(); return;
+    case "locate": locate(); return;
+    case "city-edit": S.editCity = true; render(); return;
+    case "w-refresh": refreshWeather(true); return;
+    case "today-more": S.seed++; render(); return;
+    case "today-wear": { const o = S.todayList?.[+d.n]; if (o) logWear(o.items, "today"); return; }
+    case "today-open": { const o = S.todayList?.[+d.n]; if (o) tryOutfit(o); return; }
+    case "today-save": { const o = S.todayList?.[+d.n]; if (o) saveOutfit(o.items, "На каждый день", S.weather ? "Под погоду: " + weatherPhrase() : "", "manual"); return; }
+    case "today-ai": S.req.weather = weatherPhrase(); S.req.occasion ||= "на каждый день"; S.tab = "builder"; askAI(); window.scrollTo(0, 0); return;
+    case "wear-build": logWear(outfitIds(), "builder"); return;
+    case "wear-outfit": { const o = S.outfits.find((x) => x.id === d.id); if (o) logWear(o.items, "outfit"); return; }
+    case "unwear": S.wears = S.wears.filter((w) => w.date !== d.date); await saveKv("wears", S.wears); if (S.calDay === d.date) S.calDay = null; toast("Отметка снята"); render(); return;
+    case "cal-day": S.calDay = S.calDay === d.d ? null : d.d; render(); return;
+    case "cal-prev": case "cal-next": { const [y, m] = S.calMonth.split("-").map(Number); const dt = new Date(y, m - 1 + (d.act === "cal-next" ? 1 : -1), 1); S.calMonth = dayKey(dt).slice(0, 7); S.calDay = null; render(); return; }
+    case "build-with": { const it = byId(d.id); if (!it) return; S.build = EMPTY_BUILD(); if (it.cat === "acc") S.build.acc = [it.id]; else S.build[it.cat] = it.id; S.activeSlot = it.cat === "dress" ? "shoes" : it.cat === "top" ? "bottom" : "top"; S.fwOnly = false; S.tab = "builder"; render(); window.scrollTo(0, 0); return; }
+    case "wish-add": {
+      const g = wardrobeGaps(S.items, kindOf, { palette: analysis()?.palette || [] }).ideas.find((x) => x.key === d.key);
+      if (!g) return;
+      S.wishlist = [...S.wishlist, { id: newId(), key: g.key, title: g.title, cat: g.cat, color: g.color, done: false, created_at: Date.now() }];
+      await saveKv("wishlist", S.wishlist); toast("Добавлено в вишлист"); render(); return;
+    }
+    case "wish-del": S.wishlist = S.wishlist.filter((w) => w.id !== d.id); await saveKv("wishlist", S.wishlist); render(); return;
+    case "wish-bought": {
+      const w = S.wishlist.find((x) => x.id === d.id); if (!w) return;
+      S.wishlist = S.wishlist.map((x) => (x.id === d.id ? { ...x, done: true } : x)); await saveKv("wishlist", S.wishlist);
+      S.tab = "wardrobe"; S.edit = "new"; S.draft = { ...blankDraft(), name: w.key ? "" : w.title, cat: w.cat || "top", color: w.color || "black" };
+      toast("Добавь купленную вещь в гардероб"); render(); window.scrollTo(0, 0); return;
+    }
+    case "cap-preset": S.cap.preset = d.k; render(); return;
+    case "cap-season": S.cap.season = d.k; render(); return;
+    case "cap-style": { const a = S.cap.styles, i = a.indexOf(d.k); i >= 0 ? a.splice(i, 1) : a.push(d.k); render(); return; }
+    case "cap-build": S.capResult = { ...buildCapsule(S.items, kindOf, S.cap), checked: [] }; render(); return;
+    case "cap-save": {
+      const r = S.capResult; if (!r) return;
+      const name = `${r.title} · ${new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}`;
+      S.capsules = [{ ...r, id: newId(), name, created_at: Date.now() }, ...S.capsules]; S.capResult = null;
+      await saveKv("capsules", S.capsules); toast("Капсула сохранена"); render(); return;
+    }
+    case "cap-del": S.capsules = S.capsules.filter((c) => c.id !== d.id); await saveKv("capsules", S.capsules); render(); return;
     case "br-copy": copyPrompt(); return;
     case "br-apply": applyAnswer(); return;
     case "br-close": S.br = null; render(); return;
@@ -697,6 +933,12 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("submit", (e) => {
   e.preventDefault();
   if (e.target.id === "item-form") saveItem();
+  if (e.target.id === "city-form") { const q = $("city-in").value.trim(); if (q) { S.cityDraft = q; S.editCity = false; setCity(q); } }
+  if (e.target.id === "wish-form") {
+    const t = $("wish-in").value.trim(); if (!t) return;
+    S.wishlist = [...S.wishlist, { id: newId(), title: t.slice(0, 80), done: false, created_at: Date.now() }];
+    saveKv("wishlist", S.wishlist).then(render);
+  }
 });
 document.addEventListener("change", (e) => {
   const id = e.target.id;
@@ -706,6 +948,12 @@ document.addEventListener("change", (e) => {
     e.target.files[0].text().then((t) => { try { S.importConfirm = JSON.parse(t); } catch { toast("Файл не похож на копию гардероба"); } render(); });
   }
   if (id === "f-color" || id === "f-cat") { readForm(); render(); }
+  if (e.target.dataset?.cap) {
+    const capId = e.target.dataset.cap, item = e.target.dataset.item, on = e.target.checked;
+    const upd = (c) => ({ ...c, checked: on ? [...new Set([...(c.checked || []), item])] : (c.checked || []).filter((x) => x !== item) });
+    if (capId === "new") { S.capResult = upd(S.capResult); }
+    else { S.capsules = S.capsules.map((c) => (c.id === capId ? upd(c) : c)); saveKv("capsules", S.capsules).then(render); }
+  }
 });
 document.addEventListener("input", (e) => {
   if (/^r-/.test(e.target.id)) S.req[e.target.id.slice(2)] = e.target.value;

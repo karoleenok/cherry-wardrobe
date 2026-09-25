@@ -80,4 +80,55 @@ const { PINS } = await import("./pins.js");
 const { SEASON_KEYS } = await import("./catalog.js");
 for (const k of SEASON_KEYS) assert.ok(PINS[k]?.w?.length && PINS[k]?.m?.length, "нет пинов для " + k);
 
+// ---------- logic.js ----------
+const L = await import("./logic.js");
+const kind = (c) => (["green", "burgundy", "cherry", "blue"].includes(c) ? "accent" : c === "orange" ? "avoid" : "neutral");
+const W = [
+  { id: "t1", cat: "top", color: "black", seasons: ["fw", "ss"], styles: ["minimal"] },
+  { id: "t2", cat: "top", color: "green", seasons: ["fw"], styles: ["grunge"] },
+  { id: "t3", cat: "top", color: "orange", seasons: ["ss"], styles: [] },
+  { id: "b1", cat: "bottom", color: "denim", seasons: ["fw", "ss"], styles: ["casual"] },
+  { id: "b2", cat: "bottom", color: "black", seasons: ["fw"], styles: ["grunge"] },
+  { id: "s1", cat: "shoes", color: "black", seasons: ["fw"], styles: ["grunge"] },
+  { id: "o1", cat: "outer", color: "black", seasons: ["fw"], styles: [] },
+  { id: "a1", cat: "acc", color: "cherry", seasons: ["fw", "ss"], styles: [] },
+];
+// погода
+assert.equal(L.weatherNeeds({ temp: 3, feels: 1, code: 61, rainChance: 80, wind: 10 }).needOuter, true);
+assert.equal(L.weatherNeeds({ temp: 3, feels: 1, code: 61, rainChance: 80, wind: 10 }).season, "fw");
+assert.equal(L.weatherNeeds({ temp: 27, feels: 27, code: 0, rainChance: 0, wind: 5 }).noOuter, true);
+assert.equal(L.weatherText(63).text, "дождь");
+// подбор: в холод есть верхняя одежда, образы разные и собраны
+const cold = L.suggestOutfits(W, kind, L.weatherNeeds({ temp: 2, code: 3, rainChance: 0, wind: 5 }), { n: 3, seed: 5 });
+assert.ok(cold.length >= 1);
+for (const o of cold) {
+  const its = o.items.map((id) => W.find((w) => w.id === id));
+  assert.ok(its.some((i) => i.cat === "outer"), "в холод нужна верхняя одежда");
+  assert.ok(its.some((i) => i.cat === "shoes"));
+  assert.ok(!o.items.includes("t3"), "летний верх неподходящего цвета не предлагаем в холод");
+}
+const hot = L.suggestOutfits(W, kind, L.weatherNeeds({ temp: 28, code: 0, rainChance: 0, wind: 1 }), { n: 2, seed: 3 });
+assert.ok(hot.every((o) => !o.items.includes("o1")), "в жару без верхней одежды");
+// сочетания
+assert.equal(L.countCombos(W, kind), 3 * 2 * 1);
+// статистика носки
+const st = L.wearStats(W, [{ date: "2026-09-20", items: ["t1", "b1", "s1"] }, { date: "2026-09-25", items: ["t1", "b2", "s1"] }, { date: "2026-09-26", items: ["t2", "b2", "s1"] }], "2026-09-26");
+assert.equal(st.byCount[0].id, "s1");
+assert.equal(st.byCount[0].count, 3);
+assert.equal(st.streak, 2);
+assert.equal(st.rows.find((r) => r.id === "t1").since, 1);
+const priced = L.wearStats([{ ...W[0], price: 3000 }], [{ date: "2026-09-01", items: ["t1"] }, { date: "2026-09-02", items: ["t1"] }], "2026-09-26");
+assert.equal(priced.rows[0].cpw, 1500);
+// пробелы: без обуви на лето — срочно; неподходящий верх у лица отмечен
+const g = L.wardrobeGaps(W, kind, { palette: ["black", "milk", "green", "burgundy"] });
+assert.ok(g.ideas.some((x) => x.key === "shoes-ss" && x.urgent));
+assert.deepEqual(g.faceAvoid, ["t3"]);
+assert.ok(g.ideas[0].urgent);
+// капсула: не больше лимитов по категориям, есть обувь, есть примеры
+const cap = L.buildCapsule(W, kind, { preset: "trip" });
+const capItems = cap.items.map((id) => W.find((w) => w.id === id));
+assert.ok(capItems.some((i) => i.cat === "shoes"));
+assert.ok(capItems.filter((i) => i.cat === "top").length <= 4);
+assert.ok(cap.combos >= 1 && cap.examples.length >= 1);
+
 console.log("OK: все проверки прошли");

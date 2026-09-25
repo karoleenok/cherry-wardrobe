@@ -36,6 +36,7 @@ export const byNewest = (a, b) => (b.created_at || 0) - (a.created_at || 0);
 
 export const store = {
   all: (s) => tx(s, "readonly", (o) => req(o.getAll())),
+  keys: (s) => tx(s, "readonly", (o) => req(o.getAllKeys())),
   put: (s, v, key) => tx(s, "readwrite", (o) => req(key === undefined ? o.put(v) : o.put(v, key))),
   get: (s, key) => tx(s, "readonly", (o) => req(o.get(key))),
   del: (s, key) => tx(s, "readwrite", (o) => req(o.delete(key))),
@@ -62,7 +63,9 @@ export async function exportAll() {
     const b = await store.get("photos", k);
     if (b) photos[k] = await blobToB64(b);
   }
-  return { app: "cherry-wardrobe", version: 1, exported_at: new Date().toISOString(), items, outfits, profile: profile || null, photos };
+  const kv = {};
+  for (const k of await store.keys("kv")) kv[k] = await store.get("kv", k);
+  return { app: "cherry-wardrobe", version: 2, exported_at: new Date().toISOString(), items, outfits, profile: profile || null, kv, photos };
 }
 
 export async function importAll(data) {
@@ -71,6 +74,7 @@ export async function importAll(data) {
   for (const it of data.items) await store.put("items", it);
   for (const o of data.outfits || []) await store.put("outfits", o);
   if (data.profile) await store.put("kv", data.profile, "profile");
+  for (const [k, v] of Object.entries(data.kv || {})) if (["settings", "wears", "wishlist", "capsules"].includes(k)) await store.put("kv", v, k);
   for (const [k, v] of Object.entries(data.photos || {}))
     if (typeof v === "string" && v.startsWith("data:image/")) await store.put("photos", await b64ToBlob(v), k);
 }
