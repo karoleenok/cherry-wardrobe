@@ -528,23 +528,78 @@ function calloutLayer(marks) {
   const placed = [...side(marks.filter((m) => m.x < cx), 0.06), ...side(marks.filter((m) => m.x >= cx), 0.94)];
   const pct = (v) => (v * 100).toFixed(2);
   return `<svg class="leads" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      ${placed.map((p) => `<line x1="${pct(p.m.x)}" y1="${pct(p.m.y)}" x2="${pct(p.x)}" y2="${pct(p.y)}" class="lead-shadow"/><line x1="${pct(p.m.x)}" y1="${pct(p.m.y)}" x2="${pct(p.x)}" y2="${pct(p.y)}" class="lead-line"/>`).join("")}
+      ${placed.map((p) => `<line x1="${pct(p.m.x)}" y1="${pct(p.m.y)}" x2="${pct(p.x)}" y2="${pct(p.y)}" class="lead-line"/>`).join("")}
     </svg>
-    ${placed.map((p) => `<i class="pt" style="left:${pct(p.m.x)}%;top:${pct(p.m.y)}%;background:${p.m.hex || "var(--accent)"}"></i><span class="tn" style="left:${pct(p.x)}%;top:${pct(p.y)}%">${p.m.n}</span>`).join("")}`;
+    ${placed.map((p) => `<i class="pt" data-mi="${p.m.n - 1}" role="slider" tabindex="0" aria-label="Метка ${p.m.n}: перетащи, чтобы поправить" style="left:${pct(p.m.x)}%;top:${pct(p.m.y)}%;background:${p.m.hex || "var(--accent)"}"></i><span class="tn" style="left:${pct(p.x)}%;top:${pct(p.y)}%">${p.m.n}</span>`).join("")}`;
 }
+const lookMarks = (a, i) => (a.markers || []).map((m, n) => ({ ...m, n: n + 1 })).filter((m) => m.photo === i + 1);
+
+// Перетаскивание точек: во время движения перерисовывается только слой меток,
+// после отпускания точка заново снимает оттенок с фото и разбор сохраняется.
+let drag = null;
+function lookIndex() {
+  const photos = (S.profile?.photos || []).filter((k) => S.urls[k]);
+  return { photos, i: Math.min(S.viewPhoto, photos.length - 1) };
+}
+function moveMarker(mi, fx, fy) {
+  const a = analysis(); const m = a?.markers?.[mi]; if (!m) return;
+  m.x = Math.min(1, Math.max(0, fx)); m.y = Math.min(1, Math.max(0, fy));
+  const layer = $("look-layer");
+  if (layer) layer.innerHTML = calloutLayer(lookMarks(a, lookIndex().i));
+}
+async function commitMarker(mi) {
+  const a = analysis(); const m = a?.markers?.[mi]; if (!m) return;
+  const { photos } = lookIndex();
+  const key = (S.profile.photos || [])[m.photo - 1];
+  if (key && photos.includes(key) && sampleable(m.kind)) {
+    try { const b = await store.get("photos", key); if (b) m.hex = await sampleAt(b, m.x, m.y); } catch {}
+  }
+  await setProfile({ ...S.profile, analysis: a });
+  render();
+}
+document.addEventListener("pointerdown", (e) => {
+  const pt = e.target.closest?.(".look-photo .pt");
+  if (!pt) return;
+  e.preventDefault();
+  drag = { mi: +pt.dataset.mi, box: pt.closest(".look-photo").getBoundingClientRect(), moved: false };
+  document.body.classList.add("dragging");
+});
+document.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  drag.moved = true;
+  moveMarker(drag.mi, (e.clientX - drag.box.left) / drag.box.width, (e.clientY - drag.box.top) / drag.box.height);
+});
+function endDrag() {
+  if (!drag) return;
+  const d = drag; drag = null;
+  document.body.classList.remove("dragging");
+  if (d.moved) commitMarker(d.mi);
+}
+document.addEventListener("pointerup", endDrag);
+document.addEventListener("pointercancel", endDrag);
+document.addEventListener("keydown", (e) => {
+  const pt = e.target.closest?.(".look-photo .pt");
+  const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!pt || !step) return;
+  e.preventDefault();
+  const mi = +pt.dataset.mi, m = analysis()?.markers?.[mi]; if (!m) return;
+  moveMarker(mi, m.x + step[0] * 0.01, m.y + step[1] * 0.01);
+  clearTimeout(commitMarker.t); commitMarker.t = setTimeout(() => commitMarker(mi), 500);
+});
+
 function viewLook(a) {
   const photos = (S.profile?.photos || []).filter((k) => S.urls[k]);
   if (!photos.length) return "";
   const i = Math.min(S.viewPhoto, photos.length - 1);
-  const marks = (a.markers || []).map((m, n) => ({ ...m, n: n + 1 })).filter((m) => m.photo === i + 1);
+  const marks = lookMarks(a, i);
   return `<div class="look">
     <div class="stack" style="gap:8px">
       <div class="pip look-photo"><img src="${S.urls[photos[i]]}" alt="Фото ${i + 1} с метками признаков">
-        ${calloutLayer(marks)}
+        <div class="layer" id="look-layer">${calloutLayer(marks)}</div>
       </div>
       ${photos.length > 1 ? `<div class="thumbs">${photos.map((k, j) => `<button data-act="look" data-i="${j}" aria-pressed="${j === i}" aria-label="Фото ${j + 1}"><img src="${S.urls[k]}" alt=""></button>`).join("")}</div>` : ""}
     </div>
-    <div class="stack" style="gap:10px"><span class="k">Признаки на фото</span>
+    <div class="stack" style="gap:10px"><span class="k">Признаки на фото</span><span class="muted small">Точки можно перетащить, если Claude поставил их неточно.</span>
       ${marks.length ? `<ol class="legend">${marks.map((m) => `<li><span class="lg-n">${m.n}</span><span class="stack" style="gap:2px"><b>${esc(m.label)}</b><span class="muted small">${esc(MARK_KINDS[m.kind] || "")}${m.hex ? ` · <i class="dot" style="background:${m.hex}"></i> ${m.hex}` : ""}</span>${m.note ? `<span class="small">${esc(m.note)}</span>` : ""}</span></li>`).join("")}</ol>`
         : '<p class="muted small">На этом фото Claude не отметил признаков.</p>'}
     </div>
